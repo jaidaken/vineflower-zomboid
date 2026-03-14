@@ -397,6 +397,12 @@ public interface IFernflowerPreferences {
   @Type(DecompilerOption.Type.STRING)
   String VALIDATE_INNER_CLASSES_NAMES = "validate-inner-classes-names";
 
+  @Name("Roundtrip Fidelity")
+  @Description("Preserve original bytecode ordering hints for roundtrip compilation fidelity")
+  @ShortName("rtf")
+  @Type(DecompilerOption.Type.BOOLEAN)
+  String ROUNDTRIP_FIDELITY = "roundtrip-fidelity";
+
   Map<String, Object> DEFAULTS = getDefaults();
 
   static Map<String, Object> getDefaults() {
@@ -470,6 +476,7 @@ public interface IFernflowerPreferences {
     defaults.put(MARK_CORRESPONDING_SYNTHETICS, "0");
     defaults.put(EXCLUDED_CLASSES, "");
     defaults.put(VALIDATE_INNER_CLASSES_NAMES, "1");
+    defaults.put(ROUNDTRIP_FIDELITY, "0");
 
     return Collections.unmodifiableMap(defaults);
   }

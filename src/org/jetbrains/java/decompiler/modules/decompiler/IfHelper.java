@@ -361,6 +361,13 @@ public final class IfHelper {
           // }
           // goto A;
 
+          // In roundtrip fidelity mode, skip this transformation as it negates the
+          // condition purely for aesthetics (guard clause direction), which would change
+          // the branch opcode direction upon recompilation.
+          if (DecompilerContext.isRoundtripFidelity()) {
+            return false;
+          }
+
           IfStatement firstif = (IfStatement) rtnode.value;
           Statement second = elsebranch.value;
 
@@ -561,6 +568,13 @@ public final class IfHelper {
             IfStatement nextIfStat = nextStat == null ? null : nextStat instanceof IfStatement ? (IfStatement) nextStat
               : nextStat instanceof SequenceStatement && nextStat.getFirst() instanceof IfStatement ? (IfStatement) nextStat.getFirst() : null;
             if (nextStat != null && (nextIfStat == null || !nextIfStat.getFirst().getExprents().isEmpty())) {
+              // In roundtrip fidelity mode, skip if-else chain denesting as it
+              // negates the condition purely for cosmetic if/elseif/else presentation,
+              // which would change the branch opcode direction upon recompilation.
+              if (DecompilerContext.isRoundtripFidelity()) {
+                return false;
+              }
+
               // negate the condition and swap the branches
               IfExprent conditionExprent = outerIf.getHeadexprent();
               conditionExprent.setCondition(new FunctionExprent(FunctionType.BOOL_NOT, conditionExprent.getCondition(), null));
@@ -680,6 +694,13 @@ public final class IfHelper {
 
       ifstat.iftype = IfStatement.IFTYPE_IFELSE;
     } else if (ifdirect && (!elsedirect || (noifstat && !noelsestat)) && !ifstat.getAllSuccessorEdges().isEmpty()) {  // if - then
+      // In roundtrip fidelity mode, skip cosmetic condition negation for guard clause reordering.
+      // This preserves the original bytecode branch direction so that recompilation produces
+      // the same branch opcodes.
+      if (DecompilerContext.isRoundtripFidelity()) {
+        return false;
+      }
+
       // negate the if condition
       IfExprent statexpr = ifstat.getHeadexprent();
       statexpr.setCondition(new FunctionExprent(FunctionType.BOOL_NOT, statexpr.getCondition(), null));

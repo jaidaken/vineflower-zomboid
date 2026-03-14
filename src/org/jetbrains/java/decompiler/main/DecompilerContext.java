@@ -116,6 +116,10 @@ public class DecompilerContext {
     return "1".equals(getProperty(key));
   }
 
+  public static boolean isRoundtripFidelity() {
+    return getOption(IFernflowerPreferences.ROUNDTRIP_FIDELITY);
+  }
+
   public static int getIntOption(String key) {
     try {
       return Integer.parseInt((String) getProperty(key));
