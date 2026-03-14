@@ -177,7 +177,11 @@ public class StackVarsProcessor {
             Exprent next = null;
 
             if (index == lst.size() - 1) {
-              if (i < lstLists.size() - 1) {
+              // In RTF mode, don't take 'next' from the next DirectNode list.
+              // RTF changes statement tree structure, causing different DirectNode
+              // boundaries. Cross-node 'next' can lead to incorrect variable
+              // inlining that chains method calls across statement boundaries.
+              if (i < lstLists.size() - 1 && !DecompilerContext.isRoundtripFidelity()) {
                 next = lstLists.get(i + 1).get(0);
               }
             } else {
@@ -505,6 +509,29 @@ public class StackVarsProcessor {
       setRet(ret, -1, changed);
       return;
     }
+  }
+
+  /**
+   * Check if a variable version is used as a method call qualifier (instance) in an expression.
+   * Returns true if inlining would produce a chained call like expr.method().
+   */
+  private static boolean isUsedAsMethodQualifier(Exprent expr, VarVersionPair var) {
+    if (expr instanceof InvocationExprent) {
+      InvocationExprent inv = (InvocationExprent) expr;
+      if (!inv.isStatic() && inv.getInstance() instanceof VarExprent) {
+        VarExprent inst = (VarExprent) inv.getInstance();
+        if (inst.getIndex() == var.var && inst.getVersion() == var.version) {
+          return true;
+        }
+      }
+    }
+    // Recurse into sub-expressions
+    for (Exprent sub : expr.getAllExprents()) {
+      if (isUsedAsMethodQualifier(sub, var)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static Exprent simplifyAcrossStackExprent(List<Exprent> exprents, int index, Exprent next, Exprent right, VarExprent left) {
