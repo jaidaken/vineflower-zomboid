@@ -11,6 +11,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
+import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
@@ -669,8 +670,12 @@ public final class SecondaryFunctionsHelper {
   public static boolean updateAssignments(Statement stat) {
     // In RTF mode, preserve the original assignment form from bytecode.
     // Do not convert "x = x + y" to "x += y" since the bytecode determines which form was used.
+    // Exception: enum classes require compound assignment processing for correct field initialization.
     if (DecompilerContext.isRoundtripFidelity()) {
-      return false;
+      StructClass cl = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS);
+      if (cl == null || !cl.hasModifier(CodeConstants.ACC_ENUM)) {
+        return false;
+      }
     }
 
     boolean res = false;

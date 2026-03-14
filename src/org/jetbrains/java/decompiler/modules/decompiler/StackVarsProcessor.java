@@ -407,17 +407,6 @@ public class StackVarsProcessor {
 
     int useflags = right.getExprentUse();
 
-    // In roundtrip fidelity mode, skip inlining of single-use variables whose right-hand side
-    // is a boxing or unboxing call. The original bytecode stores these intermediate results in
-    // local variables, and inlining them changes the variable structure upon recompilation.
-    if (DecompilerContext.isRoundtripFidelity() && right instanceof InvocationExprent) {
-      InvocationExprent invRight = (InvocationExprent) right;
-      if (invRight.isBoxingCall() || invRight.isUnboxingCall()) {
-        setRet(ret, -1, changed);
-        return;
-      }
-    }
-
     // stack variables only
     if ((!left.isStack() && !options.inlineRegularVars) &&
         (!(right instanceof VarExprent) || ((VarExprent)right).isStack())) { // special case catch(... ex)
@@ -735,16 +724,6 @@ public class StackVarsProcessor {
     if (!left.isStack()) {
       setRet(ret, null, changed, false);
       return;
-    }
-
-    // In roundtrip fidelity mode, skip inlining of single-use variables whose right-hand side
-    // is a boxing or unboxing call, preserving the original bytecode's variable structure.
-    if (DecompilerContext.isRoundtripFidelity() && right instanceof InvocationExprent) {
-      InvocationExprent invRight = (InvocationExprent) right;
-      if (invRight.isBoxingCall() || invRight.isUnboxingCall()) {
-        setRet(ret, null, changed, false);
-        return;
-      }
     }
 
     int useflags = right.getExprentUse();

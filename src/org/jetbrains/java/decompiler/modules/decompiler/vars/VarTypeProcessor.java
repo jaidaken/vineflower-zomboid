@@ -183,11 +183,15 @@ public class VarTypeProcessor {
           VarExprent varExpr = (VarExprent) exprent;
           if (varExpr.getLVT() != null) {
             VarType lvtType = varExpr.getLVT().getVarType();
-            VarVersionPair varPair = new VarVersionPair(varExpr);
-            // Pin both min and max to the LVT type, ignoring the requested narrowing
-            mapExprentMinTypes.put(varPair, lvtType);
-            mapExprentMaxTypes.put(varPair, lvtType);
-            return true;
+            // Only pin OBJECT types (reference types like IsoGameCharacter, String, etc.)
+            // Primitive LVT types are unreliable: JVM uses int for boolean/byte/short/char,
+            // so pinning would force int where byte/boolean is needed.
+            if (lvtType.type == CodeType.OBJECT) {
+              VarVersionPair varPair = new VarVersionPair(varExpr);
+              mapExprentMinTypes.put(varPair, lvtType);
+              mapExprentMaxTypes.put(varPair, lvtType);
+              return true;
+            }
           }
         }
         return changeVarExprentType(exprent, newType, minMax, new VarVersionPair((VarExprent) exprent));

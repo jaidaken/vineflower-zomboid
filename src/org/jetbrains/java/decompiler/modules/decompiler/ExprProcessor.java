@@ -575,14 +575,14 @@ public class ExprProcessor implements CodeConstants {
           stack.pop();
           break;
         case opc_pop:
-          // RTF: detect POP+INVOKESTATIC pattern to preserve instance-qualified static calls.
-          // When bytecode has GETFIELD+POP+INVOKESTATIC, the compiler was calling a static
-          // method via an instance reference (e.g., this.field.staticMethod()).
+          // RTF: detect GETFIELD/ALOAD + POP + INVOKESTATIC pattern to preserve
+          // instance-qualified static calls (e.g., this.field.staticMethod()).
+          // Only save field loads and variable loads — NOT method return values,
+          // which would incorrectly chain calls (e.g., list.add(x).staticMethod()).
           if (DecompilerContext.isRoundtripFidelity() && i + 1 < seq.length()
               && seq.getInstr(i + 1).opcode == opc_invokestatic) {
             Exprent popped = stack.pop();
-            if (popped instanceof FieldExprent || popped instanceof VarExprent
-                || popped instanceof InvocationExprent) {
+            if (popped instanceof FieldExprent || popped instanceof VarExprent) {
               rtfStaticInstanceQualifier = popped;
             }
           } else {
