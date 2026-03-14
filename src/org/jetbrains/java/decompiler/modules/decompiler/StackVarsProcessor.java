@@ -24,6 +24,7 @@ import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.collections.FastSparseSetFactory.FastSparseSet;
 import org.jetbrains.java.decompiler.util.InterpreterUtil;
@@ -183,7 +184,12 @@ public class StackVarsProcessor {
               next = lst.get(index + 1);
             }
 
-            boolean simplifyAcrossStack = stackStage == 1;
+            // In RTF mode, disable the aggressive second-pass inlining that looks at
+            // exprents.get(index+2). RTF's IfHelper changes alter statement tree structure,
+            // causing DirectGraph flattening to produce different exprent orderings.
+            // The second pass can then incorrectly inline variables across statement
+            // boundaries, producing invalid method chains (e.g., add().alloc().init()).
+            boolean simplifyAcrossStack = stackStage == 1 && !DecompilerContext.isRoundtripFidelity();
 
             // {newIndex, changed}
             iterateExprent(lst, index, next, mapVarValues, ssa, simplifyAcrossStack, ret, options);
