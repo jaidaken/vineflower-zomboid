@@ -400,14 +400,14 @@ public class MethodProcessor implements Runnable {
     // RTF mode can leave unreachable statements after unconditional control
     // flow transfers (return/break/continue/throw) because condition negation
     // is blocked in IfHelper. Remove them so javac does not reject the output.
-    // TODO: Dead code elimination disabled — causes <unrepresentable> switch map issues.
-    // Need to investigate interaction with SwitchHelper.simplifySwitches.
-    // if (DecompilerContext.isRoundtripFidelity()) {
-    //   if (DeadCodeEliminator.eliminateDeadCode(root)) {
-    //     SequenceHelper.condenseSequences(root);
-    //     decompileRecord.add("EliminateDeadCode", root);
-    //   }
-    // }
+    // The DeadCodeEliminator skips switch case sequences to avoid breaking case blocks.
+    // Synthetic $N classes have RTF disabled (line 96) to avoid <unrepresentable> issues.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      if (DeadCodeEliminator.eliminateDeadCode(root)) {
+        SequenceHelper.condenseSequences(root);
+        decompileRecord.add("EliminateDeadCode", root);
+      }
+    }
 
     // this has to be done after all inlining is done so the case values do not get reverted
     if (root.hasSwitch() && SwitchHelper.simplifySwitches(root, mt, root)) {
