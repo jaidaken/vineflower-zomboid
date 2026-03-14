@@ -577,13 +577,20 @@ public class ExprProcessor implements CodeConstants {
         case opc_pop:
           // RTF: detect GETFIELD/ALOAD + POP + INVOKESTATIC pattern to preserve
           // instance-qualified static calls (e.g., this.field.staticMethod()).
-          // Only save field loads and variable loads — NOT method return values,
-          // which would incorrectly chain calls (e.g., list.add(x).staticMethod()).
+          // pushEx wraps ALL expressions in stack variables, so stack.pop() always
+          // returns VarExprent. We must look at the DEFINITION (the assignment RHS
+          // in exprlist) to determine if the source was a field/variable load vs
+          // a method return value. Only field/variable loads are valid qualifiers.
           if (DecompilerContext.isRoundtripFidelity() && i + 1 < seq.length()
-              && seq.getInstr(i + 1).opcode == opc_invokestatic) {
+              && seq.getInstr(i + 1).opcode == opc_invokestatic && !exprlist.isEmpty()) {
             Exprent popped = stack.pop();
-            if (popped instanceof FieldExprent || popped instanceof VarExprent) {
-              rtfStaticInstanceQualifier = popped;
+            Exprent lastExpr = exprlist.get(exprlist.size() - 1);
+            if (lastExpr instanceof AssignmentExprent) {
+              Exprent rhs = ((AssignmentExprent) lastExpr).getRight();
+              if (rhs instanceof FieldExprent ||
+                  (rhs instanceof VarExprent && !((VarExprent) rhs).isStack())) {
+                rtfStaticInstanceQualifier = popped;
+              }
             }
           } else {
             stack.pop();
