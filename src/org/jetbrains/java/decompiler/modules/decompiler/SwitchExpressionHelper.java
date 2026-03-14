@@ -40,6 +40,12 @@ public final class SwitchExpressionHelper {
       return false;
     }
 
+    // In roundtrip fidelity mode, do not upgrade traditional switch statements
+    // to Java 14+ switch expressions. The original code uses traditional switches.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      return false;
+    }
+
     // At this stage, there are no variable definitions
     // So we need to figure out which variable, if any, this switch statement is an expression of and make it generate.
 

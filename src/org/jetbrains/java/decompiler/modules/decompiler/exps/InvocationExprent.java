@@ -74,6 +74,9 @@ public class InvocationExprent extends Exprent {
   private final BoxState boxing = new BoxState();
   private boolean isSyntheticNullCheck = false;
   private boolean wasLazyCondy = false;
+  // In RTF mode, stores the instance qualifier for static methods called via instance reference
+  // (e.g., this.clim.lerp() where lerp is static, compiled as GETFIELD+POP+INVOKESTATIC)
+  private Exprent staticInstanceQualifier = null;
 
   public InvocationExprent() {
     super(Exprent.Type.INVOCATION);
@@ -190,6 +193,7 @@ public class InvocationExprent extends Exprent {
     bootstrapArguments = expr.getBootstrapArguments();
     isSyntheticNullCheck = expr.isSyntheticNullCheck();
     wasLazyCondy = expr.wasLazyCondy;
+    staticInstanceQualifier = expr.staticInstanceQualifier != null ? expr.staticInstanceQualifier.copy() : null;
 
     if (invocationType == InvocationType.DYNAMIC && !isStatic && instance != null && !lstParameters.isEmpty()) {
       // method reference, instance and first param are expected to be the same var object
@@ -674,6 +678,9 @@ public class InvocationExprent extends Exprent {
     if (instance != null) {
       lst.add(instance);
     }
+    if (staticInstanceQualifier != null) {
+      lst.add(staticInstanceQualifier);
+    }
     lst.addAll(lstParameters);
     return lst;
   }
@@ -714,9 +721,15 @@ public class InvocationExprent extends Exprent {
         buf.append('(').appendCastTypeName(descriptor.ret).append(')');
       }
 
-      ClassNode node = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
-      if (node == null || !classname.equals(node.classStruct.qualifiedName)) {
-        buf.appendAllClasses(DecompilerContext.getImportCollector().getShortNameInClassContext(ExprProcessor.buildJavaClassName(classname)), classname);
+      // In RTF mode, preserve instance-qualified static method calls (e.g., this.field.staticMethod())
+      // when the original bytecode called a static method via an instance reference.
+      if (DecompilerContext.isRoundtripFidelity() && staticInstanceQualifier != null) {
+        buf.append(staticInstanceQualifier.toJava(indent));
+      } else {
+        ClassNode node = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+        if (node == null || !classname.equals(node.classStruct.qualifiedName)) {
+          buf.appendAllClasses(DecompilerContext.getImportCollector().getShortNameInClassContext(ExprProcessor.buildJavaClassName(classname)), classname);
+        }
       }
     }
     else {
@@ -1722,6 +1735,10 @@ public class InvocationExprent extends Exprent {
       instance = newExpr;
     }
 
+    if (oldExpr == staticInstanceQualifier) {
+      staticInstanceQualifier = newExpr;
+    }
+
     for (int i = 0; i < lstParameters.size(); i++) {
       if (oldExpr == lstParameters.get(i)) {
         lstParameters.set(i, newExpr);
@@ -1790,6 +1807,14 @@ public class InvocationExprent extends Exprent {
 
   public void setStatic(boolean isStatic) {
     this.isStatic = isStatic;
+  }
+
+  public Exprent getStaticInstanceQualifier() {
+    return staticInstanceQualifier;
+  }
+
+  public void setStaticInstanceQualifier(Exprent qualifier) {
+    this.staticInstanceQualifier = qualifier;
   }
 
   public String getName() {

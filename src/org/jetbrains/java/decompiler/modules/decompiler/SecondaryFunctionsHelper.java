@@ -425,15 +425,18 @@ public final class SecondaryFunctionsHelper {
             VarType exprType = lstOperands.get(0).getExprType();
             VarType castType = fexpr.getSimpleCastType();
 
-            // Simplify widening cast
-            if (castType.typeFamily == TypeFamily.INTEGER) {
-              if (castType.isStrictSuperset(exprType)) {
+            // Simplify widening cast — but in RTF mode, preserve explicit casts
+            // when the original bytecode had explicit widening instructions (F2D, I2L, etc.)
+            if (!DecompilerContext.isRoundtripFidelity()) {
+              if (castType.typeFamily == TypeFamily.INTEGER) {
+                if (castType.isStrictSuperset(exprType)) {
+                  fexpr.setNeedsCast(false);
+                  return ret;
+                }
+              } else if (castType.typeFamily.isGreater(exprType.typeFamily)) {
                 fexpr.setNeedsCast(false);
                 return ret;
               }
-            } else if (castType.typeFamily.isGreater(exprType.typeFamily)) {
-              fexpr.setNeedsCast(false);
-              return ret;
             }
             break;
           case ADD:
@@ -664,6 +667,12 @@ public final class SecondaryFunctionsHelper {
    * @param stat The provided statement
    */
   public static boolean updateAssignments(Statement stat) {
+    // In RTF mode, preserve the original assignment form from bytecode.
+    // Do not convert "x = x + y" to "x += y" since the bytecode determines which form was used.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      return false;
+    }
+
     boolean res = false;
     // Get all sequential objects if the statement doesn't have exprents
     List<Object> objects = new ArrayList<>(stat.getExprents() == null ? stat.getSequentialObjects() : stat.getExprents());

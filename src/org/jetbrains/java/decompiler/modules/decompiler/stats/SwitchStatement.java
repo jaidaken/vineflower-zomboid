@@ -393,42 +393,46 @@ public class SwitchStatement extends Statement {
       edges.add(lst);
     }
 
-    // sort edges (bubblesort)
-    for (int i = 0; i < edges.size() - 1; i++) {
-      for (int j = edges.size() - 1; j > i; j--) {
-        if (edges.get(j - 1).get(0) > edges.get(j).get(0)) {
-          edges.set(j, edges.set(j - 1, edges.get(j)));
-          nodes.set(j, nodes.set(j - 1, nodes.get(j)));
+    // In roundtrip fidelity mode, preserve the original bytecode case order
+    // instead of sorting numerically or rearranging cliques.
+    if (!DecompilerContext.isRoundtripFidelity()) {
+      // sort edges (bubblesort)
+      for (int i = 0; i < edges.size() - 1; i++) {
+        for (int j = edges.size() - 1; j > i; j--) {
+          if (edges.get(j - 1).get(0) > edges.get(j).get(0)) {
+            edges.set(j, edges.set(j - 1, edges.get(j)));
+            nodes.set(j, nodes.set(j - 1, nodes.get(j)));
+          }
         }
       }
-    }
 
-    // sort statement cliques
-    for (int index = 0; index < nodes.size(); index++) {
-      Statement stat = nodes.get(index);
+      // sort statement cliques
+      for (int index = 0; index < nodes.size(); index++) {
+        Statement stat = nodes.get(index);
 
-      if (stat != null) {
-        HashSet<Statement> setPreds = new HashSet<>(stat.getNeighbours(StatEdge.TYPE_REGULAR, EdgeDirection.BACKWARD));
-        setPreds.remove(first);
+        if (stat != null) {
+          HashSet<Statement> setPreds = new HashSet<>(stat.getNeighbours(StatEdge.TYPE_REGULAR, EdgeDirection.BACKWARD));
+          setPreds.remove(first);
 
-        if (!setPreds.isEmpty()) {
-          Statement pred =
-            setPreds.iterator().next(); // assumption: at most one predecessor node besides the head. May not hold true for obfuscated code.
-          for (int j = 0; j < nodes.size(); j++) {
-            if (j != (index - 1) && nodes.get(j) == pred) {
-              nodes.add(j + 1, stat);
-              edges.add(j + 1, edges.get(index));
+          if (!setPreds.isEmpty()) {
+            Statement pred =
+              setPreds.iterator().next(); // assumption: at most one predecessor node besides the head. May not hold true for obfuscated code.
+            for (int j = 0; j < nodes.size(); j++) {
+              if (j != (index - 1) && nodes.get(j) == pred) {
+                nodes.add(j + 1, stat);
+                edges.add(j + 1, edges.get(index));
 
-              if (j > index) {
-                nodes.remove(index);
-                edges.remove(index);
-                index--;
+                if (j > index) {
+                  nodes.remove(index);
+                  edges.remove(index);
+                  index--;
+                }
+                else {
+                  nodes.remove(index + 1);
+                  edges.remove(index + 1);
+                }
+                break;
               }
-              else {
-                nodes.remove(index + 1);
-                edges.remove(index + 1);
-              }
-              break;
             }
           }
         }

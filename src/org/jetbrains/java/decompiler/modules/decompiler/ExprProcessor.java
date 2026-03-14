@@ -205,6 +205,10 @@ public class ExprProcessor implements CodeConstants {
 
     InstructionSequence seq = block.getSeq();
 
+    // RTF: temporary storage for popped expression preceding an INVOKESTATIC,
+    // used to preserve instance-qualified static method calls.
+    Exprent rtfStaticInstanceQualifier = null;
+
     for (int i = 0; i < seq.length(); i++) {
 
       Instruction instr = seq.getInstr(i);
@@ -488,6 +492,11 @@ public class ExprProcessor implements CodeConstants {
             }
 
             InvocationExprent exprinv = new InvocationExprent(instr.opcode, invoke_constant, bootstrapMethod, bootstrap_arguments, stack, bytecode_offsets);
+            // RTF: attach the saved instance qualifier from a preceding POP to this INVOKESTATIC
+            if (rtfStaticInstanceQualifier != null && instr.opcode == opc_invokestatic) {
+              exprinv.setStaticInstanceQualifier(rtfStaticInstanceQualifier);
+              rtfStaticInstanceQualifier = null;
+            }
             if (exprinv.getDescriptor().ret.type == CodeType.VOID) {
               exprlist.add(exprinv);
             }
@@ -566,7 +575,19 @@ public class ExprProcessor implements CodeConstants {
           stack.pop();
           break;
         case opc_pop:
-          stack.pop();
+          // RTF: detect POP+INVOKESTATIC pattern to preserve instance-qualified static calls.
+          // When bytecode has GETFIELD+POP+INVOKESTATIC, the compiler was calling a static
+          // method via an instance reference (e.g., this.field.staticMethod()).
+          if (DecompilerContext.isRoundtripFidelity() && i + 1 < seq.length()
+              && seq.getInstr(i + 1).opcode == opc_invokestatic) {
+            Exprent popped = stack.pop();
+            if (popped instanceof FieldExprent || popped instanceof VarExprent
+                || popped instanceof InvocationExprent) {
+              rtfStaticInstanceQualifier = popped;
+            }
+          } else {
+            stack.pop();
+          }
           // check for synthetic getClass and requireNonNull calls added by the compiler
           // see https://stackoverflow.com/a/20130641
           if (!exprlist.isEmpty()) {

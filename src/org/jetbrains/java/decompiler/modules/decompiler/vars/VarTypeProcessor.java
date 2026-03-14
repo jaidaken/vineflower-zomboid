@@ -175,6 +175,21 @@ public class VarTypeProcessor {
         }
         return changeVarExprentType(exprent, newType, minMax, new VarVersionPair(exprent.id, -1));
       case VAR:
+        // In roundtrip fidelity mode, preserve the exact type from the LocalVariableTable.
+        // The LVT specifies the original bytecode type (e.g. int), and we should not allow
+        // the type processor to narrow it (e.g. to byte) based on usage analysis, because
+        // that would change the local variable type upon recompilation.
+        if (DecompilerContext.isRoundtripFidelity()) {
+          VarExprent varExpr = (VarExprent) exprent;
+          if (varExpr.getLVT() != null) {
+            VarType lvtType = varExpr.getLVT().getVarType();
+            VarVersionPair varPair = new VarVersionPair(varExpr);
+            // Pin both min and max to the LVT type, ignoring the requested narrowing
+            mapExprentMinTypes.put(varPair, lvtType);
+            mapExprentMaxTypes.put(varPair, lvtType);
+            return true;
+          }
+        }
         return changeVarExprentType(exprent, newType, minMax, new VarVersionPair((VarExprent) exprent));
 
       case ASSIGNMENT:

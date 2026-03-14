@@ -88,6 +88,16 @@ public class MethodProcessor implements Runnable {
   public static RootStatement codeToJava(StructClass cl, StructMethod mt, MethodDescriptor md, VarProcessor varProc, LanguageSpec spec) throws IOException {
     CancelationManager.checkCanceled();
 
+    // Disable RTF for synthetic inner classes (switch-map $1/$2 classes).
+    // RTF's IfHelper changes affect the main loop iteration count, which
+    // changes StackVarsProcessor behavior on <clinit>, breaking switch-map
+    // field resolution and producing <unrepresentable> in switch expressions.
+    boolean rtfOverride = false;
+    if (DecompilerContext.isRoundtripFidelity() && cl.qualifiedName.matches(".*\\$\\d+$")) {
+      DecompilerContext.setProperty(IFernflowerPreferences.ROUNDTRIP_FIDELITY, "0");
+      rtfOverride = true;
+    }
+
     debugCurrentlyDecompiling.set(null);
     debugCurrentCFG.set(null);
     debugCurrentDecompileRecord.set(null);
@@ -159,6 +169,9 @@ public class MethodProcessor implements Runnable {
       PassContext pctx = new PassContext(root, graph, mt, cl, varProc, decompileRecord);
       spec.pass.run(pctx);
 
+      if (rtfOverride) {
+        DecompilerContext.setProperty(IFernflowerPreferences.ROUNDTRIP_FIDELITY, "1");
+      }
       return root;
     }
 
@@ -384,6 +397,18 @@ public class MethodProcessor implements Runnable {
     decompileRecord.resetMainLoop();
     decompileRecord.add("MainLoopEnd", root);
 
+    // RTF mode can leave unreachable statements after unconditional control
+    // flow transfers (return/break/continue/throw) because condition negation
+    // is blocked in IfHelper. Remove them so javac does not reject the output.
+    // TODO: Dead code elimination disabled — causes <unrepresentable> switch map issues.
+    // Need to investigate interaction with SwitchHelper.simplifySwitches.
+    // if (DecompilerContext.isRoundtripFidelity()) {
+    //   if (DeadCodeEliminator.eliminateDeadCode(root)) {
+    //     SequenceHelper.condenseSequences(root);
+    //     decompileRecord.add("EliminateDeadCode", root);
+    //   }
+    // }
+
     // this has to be done after all inlining is done so the case values do not get reverted
     if (root.hasSwitch() && SwitchHelper.simplifySwitches(root, mt, root)) {
       SequenceHelper.condenseSequences(root); // remove empty blocks
@@ -477,6 +502,11 @@ public class MethodProcessor implements Runnable {
     DotExporter.toDotFile(decompileRecord, mt, "decompileRecord", false);
 
     mt.releaseResources();
+
+    // Restore RTF if it was temporarily disabled for synthetic classes
+    if (rtfOverride) {
+      DecompilerContext.setProperty(IFernflowerPreferences.ROUNDTRIP_FIDELITY, "1");
+    }
 
     return root;
   }

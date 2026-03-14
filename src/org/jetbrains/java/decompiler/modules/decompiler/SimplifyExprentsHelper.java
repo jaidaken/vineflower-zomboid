@@ -195,18 +195,21 @@ public class SimplifyExprentsHelper {
       }
 
       // integer ++expr and --expr  (except for vars!)
-      Exprent func = isPPIorMMI(current);
-      if (func != null) {
-        list.set(index, func);
-        res = true;
-        continue;
-      }
+      // In RTF mode, preserve the original evaluation order by skipping these conversions
+      if (!DecompilerContext.isRoundtripFidelity()) {
+        Exprent func = isPPIorMMI(current);
+        if (func != null) {
+          list.set(index, func);
+          res = true;
+          continue;
+        }
 
-      // expr++ and expr--
-      if (isIPPorIMM(current, next) || isIPPorIMM2(current, next)) {
-        list.remove(index + 1);
-        res = true;
-        continue;
+        // expr++ and expr--
+        if (isIPPorIMM(current, next) || isIPPorIMM2(current, next)) {
+          list.remove(index + 1);
+          res = true;
+          continue;
+        }
       }
 
       // assignment on stack
@@ -222,7 +225,8 @@ public class SimplifyExprentsHelper {
         continue;
       }
 
-      if (firstInvocation && inlinePPIAndMMI(current, next)) {
+      // In RTF mode, skip inlining PPI/MMI to preserve original operand order
+      if (!DecompilerContext.isRoundtripFidelity() && firstInvocation && inlinePPIAndMMI(current, next)) {
         list.remove(index);
         res = true;
         continue;
@@ -1042,6 +1046,12 @@ public class SimplifyExprentsHelper {
 
   private static boolean buildIff(Statement stat, SSAConstructorSparseEx ssa) {
     if (stat instanceof IfStatement && stat.getExprents() == null) {
+      // In roundtrip fidelity mode, skip if-else-to-ternary for RETURN statements.
+      // "if (cond) return a; else return b;" → "return cond ? a : b;" changes bytecode
+      // (two return instructions become one). Assignment ternaries are allowed since
+      // they're needed for correct code generation of constructor/new expressions.
+      // (Blocking those causes "new ClassName;" without parentheses.)
+
       IfStatement statement = (IfStatement) stat;
       Exprent ifHeadExpr = statement.getHeadexprent();
       BitSet ifHeadExprBytecode = (ifHeadExpr == null ? null : ifHeadExpr.bytecode);
@@ -1106,6 +1116,10 @@ public class SimplifyExprentsHelper {
               }
             }
           } else if (ifExpr instanceof ExitExprent && elseExpr instanceof ExitExprent) {
+            // RTF: skip return ternary collapse — two returns become one, changing bytecode
+            if (DecompilerContext.isRoundtripFidelity()) {
+              return false;
+            }
             ExitExprent ifExit = (ExitExprent) ifExpr;
             ExitExprent elseExit = (ExitExprent) elseExpr;
 
