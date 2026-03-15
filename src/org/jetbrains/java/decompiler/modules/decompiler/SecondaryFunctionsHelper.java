@@ -795,9 +795,6 @@ public final class SecondaryFunctionsHelper {
         }
 
         if (lhsNarrow && rhsWider) {
-          try { java.io.FileWriter fw = new java.io.FileWriter("/tmp/rtf_cast_insert.txt", true);
-            fw.write("INSERTING CAST: lhs=" + lhsType.type + " rhs=" + rhsType.type + " rhsClass=" + rhs.getClass().getSimpleName() + "\n");
-            fw.close(); } catch (Exception e) {}
           // Wrap RHS in a cast to the LHS type: (byte)rhs, (short)rhs, or (char)rhs
           List<Exprent> castOperands = new ArrayList<>();
           castOperands.add(rhs);

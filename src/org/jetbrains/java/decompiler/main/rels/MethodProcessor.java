@@ -510,6 +510,16 @@ public class MethodProcessor implements Runnable {
       LabelHelper.repairOrphanedLabels(root);
     }
 
+    // RTF: ensure non-void methods have return statements on all code paths.
+    // In RTF mode, IfHelper transformations that would restructure if-else blocks
+    // into proper return patterns are blocked (to preserve branch direction), which
+    // can leave code paths without return statements.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      if (ExitHelper.ensureMethodReturns(root, md)) {
+        decompileRecord.add("EnsureMethodReturns", root);
+      }
+    }
+
     // Mark oddities in the decompiled code (left behind monitors, <unknown> variables, etc.)
     // No decompile record as statement structure is not modified
     ExprProcessor.markExprOddities(root);

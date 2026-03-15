@@ -133,6 +133,15 @@ public class VarExprent extends Exprent implements Pattern {
           buffer.append("final ");
         }
         VarType definitionType = getDefinitionVarType();
+        // When the definition type is an OBJECT type (e.g., from LVT pinning),
+        // ensure it gets registered with the import collector. The normal
+        // getCastTypeName path may have its import registration blocked by a
+        // write lock from a prior rendering pass (e.g., markExprOddities).
+        if (definitionType.type == org.jetbrains.java.decompiler.struct.gen.CodeType.OBJECT
+            && definitionType.value != null) {
+          String fullName = ExprProcessor.buildJavaClassName(definitionType.value);
+          DecompilerContext.getImportCollector().ensureImported(fullName);
+        }
         String name = ExprProcessor.getCastTypeName(definitionType);
         if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType) {
           buffer.append("var");
@@ -264,6 +273,15 @@ public class VarExprent extends Exprent implements Pattern {
           StructLocalVariableTableAttribute attr = method.methodStruct.getLocalVariableAttr();
           if (attr != null) {
             String descriptor = attr.getDescriptor(originalIndex, visibleOffset);
+            if (descriptor == null && visibleOffset < 0) {
+              // Fallback: when bytecode offset is unknown, try matching by index alone.
+              // This handles VarExprents whose bytecode field is null (e.g., after
+              // stack variable simplification removed the offset information).
+              descriptor = attr.matchingVars(originalIndex)
+                  .map(LocalVariable::getDescriptor)
+                  .findFirst()
+                  .orElse(null);
+            }
             if (descriptor != null) {
               return new VarType(descriptor);
             }

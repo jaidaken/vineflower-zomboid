@@ -16,6 +16,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.vars.CheckTypesResult;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructField;
 import org.jetbrains.java.decompiler.struct.StructMethod;
+import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericClassDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericMethodDescriptor;
@@ -147,22 +148,96 @@ public class AssignmentExprent extends Exprent {
       }
     }
 
+    // RTF: track if we need to force a narrowing cast before the RHS.
+    // When the I2B/I2C/I2S cast was removed during stack variable simplification,
+    // the RHS is just an arithmetic expression without a cast wrapper. Java promotes
+    // byte/short/char to int for arithmetic, so we must add an explicit narrowing cast.
+    // We check both the declared type (from LVT/definition) and the inferred type.
+    boolean forceNarrowingCast = false;
+    VarType narrowCastType = null;
+    if (DecompilerContext.isRoundtripFidelity() && condType == null
+        && left instanceof VarExprent && right instanceof FunctionExprent) {
+      VarExprent leftVar = (VarExprent) left;
+      // Check both the inferred type and the definition type for narrowness
+      VarType declaredType = leftVar.getDefinitionVarType();
+      boolean lhsNarrow = declaredType.type == CodeType.BYTE || declaredType.type == CodeType.SHORT
+          || declaredType.type == CodeType.CHAR || declaredType.type == CodeType.BYTECHAR
+          || declaredType.type == CodeType.SHORTCHAR;
+      if (!lhsNarrow) {
+        // Fallback: check the inferred type as well
+        VarType inferredType = leftVar.getExprType();
+        lhsNarrow = inferredType.type == CodeType.BYTE || inferredType.type == CodeType.SHORT
+            || inferredType.type == CodeType.CHAR || inferredType.type == CodeType.BYTECHAR
+            || inferredType.type == CodeType.SHORTCHAR;
+        if (lhsNarrow) {
+          declaredType = inferredType;
+        }
+      }
+      if (!lhsNarrow) {
+        // Last resort: check the rendered variable name prefix.
+        // The variable renaming plugin generates names like byte0, short0, char0
+        // based on the LVT descriptor, even when the type has been widened to int.
+        String varName = leftVar.getName();
+        if (varName != null) {
+          if (varName.startsWith("byte")) {
+            lhsNarrow = true;
+            declaredType = VarType.VARTYPE_BYTE;
+          } else if (varName.startsWith("short")) {
+            lhsNarrow = true;
+            declaredType = VarType.VARTYPE_SHORT;
+          } else if (varName.startsWith("char")) {
+            lhsNarrow = true;
+            declaredType = VarType.VARTYPE_CHAR;
+          }
+        }
+      }
+      if (lhsNarrow) {
+        FunctionExprent func = (FunctionExprent) right;
+        FunctionExprent.FunctionType ft = func.getFuncType();
+        boolean isArithmetic = ft == FunctionExprent.FunctionType.ADD || ft == FunctionExprent.FunctionType.SUB
+            || ft == FunctionExprent.FunctionType.MUL || ft == FunctionExprent.FunctionType.DIV
+            || ft == FunctionExprent.FunctionType.REM
+            || ft == FunctionExprent.FunctionType.AND || ft == FunctionExprent.FunctionType.OR
+            || ft == FunctionExprent.FunctionType.XOR
+            || ft == FunctionExprent.FunctionType.SHL || ft == FunctionExprent.FunctionType.SHR
+            || ft == FunctionExprent.FunctionType.USHR;
+        if (isArithmetic) {
+          // Verify the RHS actually produces a wider type (int/long)
+          VarType rhsType = right.getExprType();
+          boolean rhsWider = rhsType.type == CodeType.INT || rhsType.type == CodeType.LONG;
+          if (rhsWider) {
+            forceNarrowingCast = true;
+            narrowCastType = declaredType;
+          }
+        }
+      }
+    }
+
     if (condType == null) {
       buffer.append(" = ");
 
-      // We must lock the collector: this prevents the retrieval of the cast type name to impact the import list.
-      // This is fine as we're only using the cast type name to ensure that it's not the unrepresentable type.
-      String castName;
-      try (var lock = DecompilerContext.getImportCollector().lock()) {
-        castName = ExprProcessor.getCastTypeName(leftType);
-      }
-
-      if (castName.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING)) {
-        // Unrepresentable, go ahead and just put the type on the right. The lhs (if a variable) should know about its type and change itself to "var" accordingly.
+      if (forceNarrowingCast) {
+        // Directly emit the narrowing cast and RHS without going through getCastedExprent,
+        // which may not detect the need due to type inference widening the LHS type.
+        buffer.append('(').appendCastTypeName(narrowCastType).append(')');
+        buffer.append('(');
         buffer.append(right.toJava(indent));
+        buffer.append(')');
       } else {
-        // Cast with the left type
-        ExprProcessor.getCastedExprent(right, leftType, buffer, indent, ExprProcessor.NullCastType.DONT_CAST_AT_ALL, false, false, false);
+        // We must lock the collector: this prevents the retrieval of the cast type name to impact the import list.
+        // This is fine as we're only using the cast type name to ensure that it's not the unrepresentable type.
+        String castName;
+        try (var lock = DecompilerContext.getImportCollector().lock()) {
+          castName = ExprProcessor.getCastTypeName(leftType);
+        }
+
+        if (castName.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING)) {
+          // Unrepresentable, go ahead and just put the type on the right. The lhs (if a variable) should know about its type and change itself to "var" accordingly.
+          buffer.append(right.toJava(indent));
+        } else {
+          // Cast with the left type
+          ExprProcessor.getCastedExprent(right, leftType, buffer, indent, ExprProcessor.NullCastType.DONT_CAST_AT_ALL, false, false, false);
+        }
       }
     } else {
       buffer.append(" ").append(condType.operator).append("= ");

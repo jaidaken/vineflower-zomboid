@@ -744,18 +744,13 @@ public final class LabelHelper {
     if (edge.explicit && edge.labeled && edge.closure != null) {
       if (!treeStatements.contains(edge.closure)) {
         // Closure was removed from the tree (e.g., by DeadCodeEliminator).
-        // Find a valid ancestor closure in the tree.
-        Statement newClosure = findValidClosure(edge.getSource(), edge.closure, treeStatements);
-        if (newClosure != null) {
-          edge.closure.getLabelEdges().remove(edge);
-          edge.closure = newClosure;
-          if (!newClosure.getLabelEdges().contains(edge)) {
-            newClosure.getLabelEdges().add(edge);
-          }
-        } else {
-          // No valid closure found - make the break unlabeled
-          edge.labeled = false;
-        }
+        // Don't reassign to a new closure — that creates labeled blocks which can cause
+        // missing return statements and uninitialized variable errors.
+        // Instead, clean up the edge: remove the label so it becomes a simple control flow transfer.
+        edge.closure.getLabelEdges().remove(edge);
+        edge.labeled = false;
+        edge.explicit = false;
+        edge.closure = null;
       } else {
         // Closure is in the tree but edge might not be registered in labelEdges
         if (!edge.closure.getLabelEdges().contains(edge)) {
@@ -763,21 +758,5 @@ public final class LabelHelper {
         }
       }
     }
-  }
-
-  // Find a valid closure by walking up from the source until we find a statement
-  // that is in the tree, is not a BasicBlockStatement/RootStatement, and contains the source.
-  private static Statement findValidClosure(Statement source, Statement oldClosure, Set<Statement> treeStatements) {
-    // Walk up from the source's parent to find the nearest valid ancestor
-    Statement current = source.getParent();
-    while (current != null) {
-      if (treeStatements.contains(current)
-          && !(current instanceof BasicBlockStatement)
-          && !(current instanceof RootStatement)) {
-        return current;
-      }
-      current = current.getParent();
-    }
-    return null;
   }
 }

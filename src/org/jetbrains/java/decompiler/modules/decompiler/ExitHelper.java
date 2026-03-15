@@ -9,7 +9,9 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement.EdgeDirection;
+import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.VarType;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -286,5 +288,178 @@ public final class ExitHelper {
     }
 
     return res;
+  }
+
+  // RTF: ensure non-void methods have return statements on all code paths.
+  // In RTF mode, IfHelper transformations that restructure if-else blocks into
+  // proper return patterns are blocked (to preserve branch direction). This can
+  // leave code paths without return statements, causing compilation errors.
+  // This pass finds the last statement in the method body and, if it doesn't
+  // end with a return/throw, appends a return with the appropriate default value.
+  public static boolean ensureMethodReturns(RootStatement root, MethodDescriptor md) {
+    if (md.ret == null || md.ret.type == CodeType.VOID) {
+      return false;
+    }
+
+    Statement body = root.getFirst();
+    if (statementEndsWithReturn(body)) {
+      return false;
+    }
+
+    // The method body does not end with a return on all code paths.
+    // Add a return with the default value at the end.
+    Exprent defaultValue = createDefaultValue(md.ret);
+    ExitExprent exitExpr = new ExitExprent(
+        ExitExprent.Type.RETURN, defaultValue, md.ret, null, md);
+    Statement lastBlock = findLastAppendableBlock(body);
+    if (lastBlock != null && lastBlock.getExprents() != null) {
+      lastBlock.getExprents().add(exitExpr);
+      return true;
+    }
+
+    // If we can't find a suitable block, create a new basic block with the return
+    // and append it as a sequence.
+    BasicBlockStatement newBlock = BasicBlockStatement.create();
+    List<Exprent> exprents = new ArrayList<>();
+    exprents.add(exitExpr);
+    newBlock.setExprents(exprents);
+
+    if (body instanceof SequenceStatement) {
+      body.getStats().addWithKey(newBlock, newBlock.id);
+      newBlock.setParent(body);
+    } else {
+      SequenceStatement seq = new SequenceStatement(Arrays.asList(body, newBlock));
+      seq.setAllParent();
+      root.replaceStatement(body, seq);
+    }
+    return true;
+  }
+
+  // Check if a statement always ends with a return or throw on all code paths.
+  private static boolean statementEndsWithReturn(Statement stat) {
+    if (stat == null) {
+      return false;
+    }
+
+    // Basic block: check if last exprent is a return or throw
+    if (stat.getExprents() != null) {
+      List<Exprent> exprents = stat.getExprents();
+      if (!exprents.isEmpty()) {
+        Exprent last = exprents.get(exprents.size() - 1);
+        if (last instanceof ExitExprent) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    switch (stat.type) {
+      case SEQUENCE:
+        // Last statement in the sequence must end with return
+        List<Statement> seqStats = stat.getStats();
+        if (seqStats.isEmpty()) return false;
+        return statementEndsWithReturn(seqStats.get(seqStats.size() - 1));
+
+      case IF:
+        IfStatement ifStat = (IfStatement) stat;
+        if (ifStat.iftype == IfStatement.IFTYPE_IFELSE) {
+          // Both branches must end with return
+          return statementEndsWithReturn(ifStat.getIfstat())
+              && statementEndsWithReturn(ifStat.getElsestat());
+        }
+        return false;
+
+      case SWITCH:
+        SwitchStatement swStat = (SwitchStatement) stat;
+        // All case branches must end with return
+        for (Statement caseStat : swStat.getCaseStatements()) {
+          if (!statementEndsWithReturn(caseStat)) {
+            return false;
+          }
+        }
+        return !swStat.getCaseStatements().isEmpty();
+
+      case TRY_CATCH:
+      case CATCH_ALL:
+        // All branches (try + catch) must end with return
+        for (Statement sub : stat.getStats()) {
+          if (!statementEndsWithReturn(sub)) {
+            return false;
+          }
+        }
+        return !stat.getStats().isEmpty();
+
+      case DO:
+        // Infinite loops always "return" in the sense that they don't fall through
+        DoStatement doStat = (DoStatement) stat;
+        if (doStat.getLooptype() == DoStatement.Type.INFINITE) {
+          return true;
+        }
+        return false;
+
+      case SYNCHRONIZED:
+        // Check the body
+        SynchronizedStatement synStat = (SynchronizedStatement) stat;
+        return statementEndsWithReturn(synStat.getBody());
+
+      default:
+        return false;
+    }
+  }
+
+  // Find the last basic block in the method body where we can append a return.
+  private static Statement findLastAppendableBlock(Statement stat) {
+    if (stat == null) return null;
+
+    if (stat.getExprents() != null) {
+      return stat;
+    }
+
+    switch (stat.type) {
+      case SEQUENCE:
+        List<Statement> seqStats = stat.getStats();
+        if (seqStats.isEmpty()) return null;
+        return findLastAppendableBlock(seqStats.get(seqStats.size() - 1));
+
+      case IF:
+        IfStatement ifStat = (IfStatement) stat;
+        // For if-else, we can't just append to the end — both branches need returns.
+        // For if-only, append after the if statement.
+        if (ifStat.iftype != IfStatement.IFTYPE_IFELSE) {
+          return null; // can't append inside an if-only
+        }
+        return null; // don't append inside if-else either
+
+      default:
+        return null;
+    }
+  }
+
+  // Create a default value expression for the given return type.
+  private static Exprent createDefaultValue(VarType retType) {
+    // Arrays (including primitive arrays like int[]) are reference types — return null
+    if (retType.arrayDim > 0) {
+      return new ConstExprent(VarType.VARTYPE_NULL, null, null);
+    }
+    switch (retType.type) {
+      case BOOLEAN:
+        return new ConstExprent(VarType.VARTYPE_BOOLEAN, 0, null);
+      case BYTE:
+      case BYTECHAR:
+      case SHORTCHAR:
+      case SHORT:
+      case CHAR:
+      case INT:
+        return new ConstExprent(VarType.VARTYPE_INT, 0, null);
+      case LONG:
+        return new ConstExprent(VarType.VARTYPE_LONG, 0L, null);
+      case FLOAT:
+        return new ConstExprent(VarType.VARTYPE_FLOAT, 0.0F, null);
+      case DOUBLE:
+        return new ConstExprent(VarType.VARTYPE_DOUBLE, 0.0, null);
+      default:
+        // Object types: return null
+        return new ConstExprent(VarType.VARTYPE_NULL, null, null);
+    }
   }
 }

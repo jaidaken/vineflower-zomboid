@@ -99,6 +99,23 @@ public class ImportCollector {
     return getShortName(fullName, true);
   }
 
+  // Force-register an import even if the collector is write-locked or the
+  // name was previously added as not-imported. Used during RTF rendering
+  // to ensure LVT-pinned types are imported.
+  public void ensureImported(String fullName) {
+    boolean wasLocked = this.writeLocked;
+    this.writeLocked = false;
+    try {
+      String shortName = getShortName(fullName, true);
+      // Remove from not-imported set in case it was previously registered with imported=false
+      if (shortName != null) {
+        setNotImportedNames.remove(shortName);
+      }
+    } finally {
+      this.writeLocked = wasLocked;
+    }
+  }
+
   public String getShortName(String fullName, boolean imported) {
     ClassNode node = DecompilerContext.getClassProcessor().getMapRootClasses().get(fullName.replace('.', '/')); //todo[r.sh] anonymous classes?
 
@@ -180,6 +197,10 @@ public class ImportCollector {
         if (!imported) {
           setNotImportedNames.add(shortName);
         }
+      } else {
+        // Write-locked: can't register the import, so return the full name
+        // to prevent unresolved short names in the output.
+        return result == null ? fullName : ((!packageName.isEmpty() ? (packageName + ".") : "") + result);
       }
     }
 

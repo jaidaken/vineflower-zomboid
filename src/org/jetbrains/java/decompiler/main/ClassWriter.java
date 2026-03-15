@@ -848,7 +848,35 @@ public class ClassWriter implements StatementWriter {
     buffer.appendIndent(indent);
 
     if (!isEnum) {
-      appendModifiers(buffer, fd.getAccessFlags(), FIELD_ALLOWED, isInterface, FIELD_EXCLUDED);
+      int fieldFlags = fd.getAccessFlags();
+
+      // RTF: suppress 'final' on non-static instance fields that have no initializer
+      // and are not initialized in any constructor. This happens when decompilation
+      // loses constructor initialization code (e.g., through dead code elimination),
+      // leaving a final field without assignment, which javac rejects.
+      if (DecompilerContext.isRoundtripFidelity()
+          && (fieldFlags & CodeConstants.ACC_FINAL) != 0
+          && (fieldFlags & CodeConstants.ACC_STATIC) == 0) {
+        Exprent dynInit = wrapper.getDynamicFieldInitializers()
+            .getWithKey(InterpreterUtil.makeUniqueKey(fd.getName(), fd.getDescriptor()));
+        if (dynInit == null) {
+          // Check if any constructor assigns this field
+          boolean assignedInConstructors = false;
+          for (MethodWrapper mw : wrapper.getMethods()) {
+            if (CodeConstants.INIT_NAME.equals(mw.methodStruct.getName())) {
+              if (mw.root != null) {
+                assignedInConstructors |= containsFieldAssignment(
+                    mw.root, cl.qualifiedName, fd.getName(), fd.getDescriptor());
+              }
+            }
+          }
+          if (!assignedInConstructors) {
+            fieldFlags &= ~CodeConstants.ACC_FINAL;
+          }
+        }
+      }
+
+      appendModifiers(buffer, fieldFlags, FIELD_ALLOWED, isInterface, FIELD_EXCLUDED);
     }
 
     Map.Entry<VarType, GenericFieldDescriptor> fieldTypeData = getFieldTypeData(fd);
@@ -1341,6 +1369,11 @@ public class ClassWriter implements StatementWriter {
 
         if (methodWrapper.decompileError != null) {
           dumpError(buffer, methodWrapper, indent + 1);
+          // For non-void methods that failed to decompile, add a default return
+          // statement so the output compiles even though the method body is only comments.
+          if (md.ret != null && md.ret.type != CodeType.VOID) {
+            buffer.appendIndent(indent + 1).append("return ").append(getDefaultReturnValue(md.ret)).append(';').appendLineSeparator();
+          }
         }
         buffer.appendIndent(indent).append('}').appendLineSeparator();
       }
@@ -1384,6 +1417,33 @@ public class ClassWriter implements StatementWriter {
       buffer.append("//");
       if (!line.isEmpty()) buffer.append(' ').append(line);
       buffer.appendLineSeparator();
+    }
+  }
+
+  // Returns the default value literal for a given return type, used when a method
+  // failed to decompile and needs a placeholder return statement.
+  private static String getDefaultReturnValue(VarType retType) {
+    if (retType.arrayDim > 0) {
+      return "null";
+    }
+    switch (retType.type) {
+      case BOOLEAN:
+        return "false";
+      case BYTE:
+      case BYTECHAR:
+      case SHORTCHAR:
+      case SHORT:
+      case CHAR:
+      case INT:
+        return "0";
+      case LONG:
+        return "0L";
+      case FLOAT:
+        return "0.0F";
+      case DOUBLE:
+        return "0.0";
+      default:
+        return "null";
     }
   }
 
@@ -1842,6 +1902,45 @@ public class ClassWriter implements StatementWriter {
   private static final int METHOD_EXCLUDED = CodeConstants.ACC_PUBLIC | CodeConstants.ACC_ABSTRACT;
 
   private static final int ACCESSIBILITY_FLAGS = CodeConstants.ACC_PUBLIC | CodeConstants.ACC_PROTECTED | CodeConstants.ACC_PRIVATE;
+
+  // RTF: check if a statement tree contains an assignment to a specific field.
+  private static boolean containsFieldAssignment(Statement stat, String className, String fieldName, String fieldDescriptor) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (expr instanceof AssignmentExprent) {
+          Exprent left = ((AssignmentExprent) expr).getLeft();
+          if (left instanceof FieldExprent) {
+            FieldExprent field = (FieldExprent) left;
+            if (fieldName.equals(field.getName())
+                && fieldDescriptor.equals(field.getDescriptor().descriptorString)
+                && className.equals(field.getClassname())) {
+              return true;
+            }
+          }
+        }
+        // Also check nested exprents
+        for (Exprent sub : expr.getAllExprents(true)) {
+          if (sub instanceof AssignmentExprent) {
+            Exprent left = ((AssignmentExprent) sub).getLeft();
+            if (left instanceof FieldExprent) {
+              FieldExprent field = (FieldExprent) left;
+              if (fieldName.equals(field.getName())
+                  && fieldDescriptor.equals(field.getDescriptor().descriptorString)
+                  && className.equals(field.getClassname())) {
+                return true;
+              }
+            }
+          }
+        }
+      }
+    }
+    for (Statement child : stat.getStats()) {
+      if (containsFieldAssignment(child, className, fieldName, fieldDescriptor)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   private static void appendModifiers(TextBuffer buffer, int flags, int allowed, boolean isInterface, int excluded) {
     flags &= allowed;
