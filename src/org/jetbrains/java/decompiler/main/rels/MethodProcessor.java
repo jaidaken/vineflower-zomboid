@@ -222,7 +222,7 @@ public class MethodProcessor implements Runnable {
 
     //		LabelHelper.lowContinueLabels(root, new HashSet<StatEdge>());
 
-    SequenceHelper.condenseSequences(root);
+    // SequenceHelper.condenseSequences(root);
     decompileRecord.add("CondenseSequences", root);
 
     ClearStructHelper.clearStatements(root);
@@ -233,7 +233,7 @@ public class MethodProcessor implements Runnable {
     proc.processStatement(root, cl);
     decompileRecord.add("ProcessStatement", root);
 
-    SequenceHelper.condenseSequences(root);
+    // SequenceHelper.condenseSequences(root);
     decompileRecord.add("CondenseSequences_1", root);
 
     // Process and simplify variables on the stack
@@ -367,7 +367,7 @@ public class MethodProcessor implements Runnable {
       // becomes:
       //   try (...) { ...; return value; }
       if (root.hasTryCatch() && TryHelper.inlineTwrReturnVars(root)) {
-        SequenceHelper.condenseSequences(root);
+        // SequenceHelper.condenseSequences(root);
         decompileRecord.add("InlineTwrReturnVars", root);
         continue;
       }
@@ -418,12 +418,12 @@ public class MethodProcessor implements Runnable {
     // isInLivePart fix, but still removes some label targets referenced
     // from live code. Needs further investigation into edge cases where
     // label edges are not detected by the current predecessor/label check.
-    // if (DecompilerContext.isRoundtripFidelity()) {
-    //   if (DeadCodeEliminator.eliminateDeadCode(root)) {
-    //     SequenceHelper.condenseSequences(root);
-    //     decompileRecord.add("EliminateDeadCode", root);
-    //   }
-    // }
+    if (DecompilerContext.isRoundtripFidelity()) {
+      if (DeadCodeEliminator.eliminateDeadCode(root)) {
+        SequenceHelper.condenseSequences(root);
+        decompileRecord.add("EliminateDeadCode", root);
+      }
+    }
 
     // this has to be done after all inlining is done so the case values do not get reverted
     if (root.hasSwitch() && SwitchHelper.simplifySwitches(root, mt, root)) {
