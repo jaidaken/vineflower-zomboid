@@ -589,7 +589,28 @@ public class ExprProcessor implements CodeConstants {
               Exprent rhs = ((AssignmentExprent) lastExpr).getRight();
               if (rhs instanceof FieldExprent ||
                   (rhs instanceof VarExprent && !((VarExprent) rhs).isStack())) {
-                rtfStaticInstanceQualifier = popped;
+                // Validate that the qualifier type matches the static method's declaring class.
+                // If "this" (var index 0) is the qualifier, the current class must match.
+                // If a field is the qualifier, the field's declaring class type must match.
+                String staticMethodClass = pool.getLinkConstant(seq.getInstr(i + 1).operand(0)).classname;
+                boolean qualifierMatches = false;
+                if (rhs instanceof VarExprent && ((VarExprent) rhs).getIndex() == 0) {
+                  // "this" qualifier - check if the static method is on the current class
+                  StructClass currentClass = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS);
+                  if (currentClass != null && currentClass.qualifiedName.equals(staticMethodClass)) {
+                    qualifierMatches = true;
+                  }
+                } else if (rhs instanceof FieldExprent) {
+                  // Field qualifier - check if the field's type matches the static method's class
+                  FieldExprent fieldRhs = (FieldExprent) rhs;
+                  String fieldTypeName = fieldRhs.getDescriptor().type.value;
+                  if (staticMethodClass.equals(fieldTypeName)) {
+                    qualifierMatches = true;
+                  }
+                }
+                if (qualifierMatches) {
+                  rtfStaticInstanceQualifier = popped;
+                }
               }
             }
           } else {
@@ -995,7 +1016,26 @@ public class ExprProcessor implements CodeConstants {
     boolean doCastNarrowing = (castNarrowing && isIntConstant(exprent) && isNarrowedIntType(leftType));
     boolean doCastGenerics = doGenericTypesCast(exprent, leftType, rightType);
 
-    boolean cast = castAlways || doCast || doCastNull || doCastNarrowing || doCastGenerics;
+    // RTF: force narrowing cast when LHS is byte/short/char and RHS is an arithmetic operation.
+    // Java promotes byte/short/char to int in arithmetic, so the result needs an explicit cast back.
+    // The decompiler's type system may report the RHS as byte (matching LHS), but Java requires the cast.
+    boolean doCastRtfNarrowing = false;
+    if (DecompilerContext.isRoundtripFidelity() && exprent instanceof FunctionExprent) {
+      FunctionExprent func = (FunctionExprent) exprent;
+      FunctionType ft = func.getFuncType();
+      boolean isArithmetic = ft == FunctionType.ADD || ft == FunctionType.SUB
+          || ft == FunctionType.MUL || ft == FunctionType.DIV || ft == FunctionType.REM
+          || ft == FunctionType.AND || ft == FunctionType.OR || ft == FunctionType.XOR
+          || ft == FunctionType.SHL || ft == FunctionType.SHR || ft == FunctionType.USHR;
+      boolean isNarrowLhs = leftType.type == CodeType.BYTE || leftType.type == CodeType.SHORT
+          || leftType.type == CodeType.CHAR || leftType.type == CodeType.BYTECHAR
+          || leftType.type == CodeType.SHORTCHAR;
+      if (isArithmetic && isNarrowLhs) {
+        doCastRtfNarrowing = true;
+      }
+    }
+
+    boolean cast = castAlways || doCast || doCastNull || doCastNarrowing || doCastGenerics || doCastRtfNarrowing;
 
     if (castNull == NullCastType.DONT_CAST_AT_ALL && rightType.type == CodeType.NULL) {
       cast = castAlways;

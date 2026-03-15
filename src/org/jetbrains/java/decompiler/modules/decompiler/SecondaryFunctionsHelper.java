@@ -674,6 +674,9 @@ public final class SecondaryFunctionsHelper {
     if (DecompilerContext.isRoundtripFidelity()) {
       StructClass cl = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS);
       if (cl == null || !cl.hasModifier(CodeConstants.ACC_ENUM)) {
+        // RTF: still need to insert narrowing casts for byte/short/char assignments
+        // where the RHS has been promoted to int by arithmetic operations.
+        insertNarrowingCasts(stat);
         return false;
       }
     }
@@ -728,6 +731,83 @@ public final class SecondaryFunctionsHelper {
     }
 
     return res;
+  }
+
+  // RTF: insert explicit narrowing casts for assignments where the LHS is byte/short/char
+  // and the RHS has been promoted to int by arithmetic operations.
+  // Without compound assignment conversion (blocked by RTF), "byte0 = byte0 + expr" needs
+  // a "(byte)" cast because byte + int promotes to int.
+  private static void insertNarrowingCasts(Statement stat) {
+    List<Object> objects = new ArrayList<>(stat.getExprents() == null ? stat.getSequentialObjects() : stat.getExprents());
+
+    for (Object obj : objects) {
+      if (obj instanceof Statement) {
+        insertNarrowingCasts((Statement) obj);
+      } else if (obj instanceof Exprent) {
+        insertNarrowingCastsInExprent((Exprent) obj);
+      }
+    }
+  }
+
+  private static void insertNarrowingCastsInExprent(Exprent exprent) {
+    // Recurse into sub-expressions first
+    for (Exprent sub : exprent.getAllExprents()) {
+      insertNarrowingCastsInExprent(sub);
+    }
+
+    if (exprent instanceof AssignmentExprent) {
+      AssignmentExprent assignment = (AssignmentExprent) exprent;
+
+      // Only non-compound assignments
+      if (assignment.getCondType() != null) {
+        return;
+      }
+
+      Exprent lhs = assignment.getLeft();
+      Exprent rhs = assignment.getRight();
+
+      if (lhs instanceof VarExprent) {
+        VarType lhsType = lhs.getExprType();
+        VarType rhsType = rhs.getExprType();
+
+        // Check if LHS is a narrow type (compare by CodeType, not reference)
+        // Also check BYTECHAR and SHORTCHAR which are decompiler-internal ambiguous types
+        boolean lhsNarrow = lhsType.type == CodeType.BYTE
+            || lhsType.type == CodeType.SHORT
+            || lhsType.type == CodeType.CHAR
+            || lhsType.type == CodeType.BYTECHAR
+            || lhsType.type == CodeType.SHORTCHAR;
+        // RHS is wider if it's explicitly int/long/float/double,
+        // OR if it's an arithmetic operation (Java promotes byte/short/char to int for arithmetic)
+        boolean rhsWider = rhsType.type == CodeType.INT
+            || rhsType.type == CodeType.LONG
+            || rhsType.type == CodeType.FLOAT
+            || rhsType.type == CodeType.DOUBLE;
+        if (!rhsWider && rhs instanceof FunctionExprent) {
+          FunctionType ft = ((FunctionExprent) rhs).getFuncType();
+          if (ft == FunctionType.ADD || ft == FunctionType.SUB
+              || ft == FunctionType.MUL || ft == FunctionType.DIV
+              || ft == FunctionType.REM
+              || ft == FunctionType.SHL || ft == FunctionType.SHR || ft == FunctionType.USHR
+              || ft == FunctionType.AND || ft == FunctionType.OR || ft == FunctionType.XOR) {
+            rhsWider = true;
+          }
+        }
+
+        if (lhsNarrow && rhsWider) {
+          try { java.io.FileWriter fw = new java.io.FileWriter("/tmp/rtf_cast_insert.txt", true);
+            fw.write("INSERTING CAST: lhs=" + lhsType.type + " rhs=" + rhsType.type + " rhsClass=" + rhs.getClass().getSimpleName() + "\n");
+            fw.close(); } catch (Exception e) {}
+          // Wrap RHS in a cast to the LHS type: (byte)rhs, (short)rhs, or (char)rhs
+          List<Exprent> castOperands = new ArrayList<>();
+          castOperands.add(rhs);
+          castOperands.add(new ConstExprent(lhsType, null, null));
+          FunctionExprent castExpr = new FunctionExprent(FunctionType.CAST, castOperands, rhs.bytecode);
+          castExpr.setNeedsCast(true);
+          assignment.setRight(castExpr);
+        }
+      }
+    }
   }
 
   public static class IdentifySecondaryOptions {

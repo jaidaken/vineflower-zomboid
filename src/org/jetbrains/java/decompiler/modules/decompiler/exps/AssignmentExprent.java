@@ -136,6 +136,17 @@ public class AssignmentExprent extends Exprent {
 
     this.optimizeCastForAssign();
 
+    // RTF: re-enable narrowing casts (I2B/I2C/I2S) that were suppressed during processing.
+    // Without this, "byte0 = byte0 + expr" loses its (byte) cast, causing lossy conversion errors.
+    if (DecompilerContext.isRoundtripFidelity() && condType == null && right instanceof FunctionExprent) {
+      FunctionExprent func = (FunctionExprent) right;
+      FunctionExprent.FunctionType ft = func.getFuncType();
+      if ((ft == FunctionExprent.FunctionType.I2B || ft == FunctionExprent.FunctionType.I2C || ft == FunctionExprent.FunctionType.I2S)
+          && !func.doesCast()) {
+        func.setNeedsCast(true);
+      }
+    }
+
     if (condType == null) {
       buffer.append(" = ");
 

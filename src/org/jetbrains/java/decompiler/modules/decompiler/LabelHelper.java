@@ -1,6 +1,7 @@
 // Copyright 2000-2020 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license that can be found in the LICENSE file.
 package org.jetbrains.java.decompiler.modules.decompiler;
 
+import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
@@ -39,6 +40,13 @@ public final class LabelHelper {
     setRetEdgesUnlabeled(root);
 
     liftSequenceLabel(root);
+
+    // RTF: repair edges whose closure is set but not registered in the closure's labelEdges list.
+    // This happens when IfHelper transformations are blocked by RTF mode, leaving break edges
+    // with a closure that never called addLabeledEdge().
+    if (DecompilerContext.isRoundtripFidelity()) {
+      repairOrphanedLabels(root);
+    }
   }
 
   private static void liftClosures(Statement stat) {
@@ -692,5 +700,84 @@ public final class LabelHelper {
     }
 
     return closure;
+  }
+
+  // RTF: scan all edges in the tree and ensure that any edge with explicit=true, labeled=true,
+  // and a non-null closure is actually registered in that closure's labelEdges list.
+  public static void repairOrphanedLabels(Statement stat) {
+    // Collect all statements in tree for validation
+    Set<Statement> treeStatements = new HashSet<>();
+    collectStatements(stat, treeStatements);
+    repairOrphanedLabelsRec(stat, treeStatements);
+  }
+
+  private static void collectStatements(Statement stat, Set<Statement> set) {
+    set.add(stat);
+    for (Statement st : stat.getStats()) {
+      collectStatements(st, set);
+    }
+  }
+
+  private static void repairOrphanedLabelsRec(Statement stat, Set<Statement> treeStatements) {
+    // Check successor edges of this statement
+    for (StatEdge edge : stat.getAllSuccessorEdges()) {
+      repairEdge(edge, treeStatements);
+    }
+
+    // For IfStatements, also check the ifedge and elseedge which may not be in successor lists
+    if (stat instanceof IfStatement) {
+      IfStatement ifStat = (IfStatement) stat;
+      if (ifStat.getIfEdge() != null) {
+        repairEdge(ifStat.getIfEdge(), treeStatements);
+      }
+      if (ifStat.getElseEdge() != null) {
+        repairEdge(ifStat.getElseEdge(), treeStatements);
+      }
+    }
+
+    for (Statement st : stat.getStats()) {
+      repairOrphanedLabelsRec(st, treeStatements);
+    }
+  }
+
+  private static void repairEdge(StatEdge edge, Set<Statement> treeStatements) {
+    if (edge.explicit && edge.labeled && edge.closure != null) {
+      if (!treeStatements.contains(edge.closure)) {
+        // Closure was removed from the tree (e.g., by DeadCodeEliminator).
+        // Find a valid ancestor closure in the tree.
+        Statement newClosure = findValidClosure(edge.getSource(), edge.closure, treeStatements);
+        if (newClosure != null) {
+          edge.closure.getLabelEdges().remove(edge);
+          edge.closure = newClosure;
+          if (!newClosure.getLabelEdges().contains(edge)) {
+            newClosure.getLabelEdges().add(edge);
+          }
+        } else {
+          // No valid closure found - make the break unlabeled
+          edge.labeled = false;
+        }
+      } else {
+        // Closure is in the tree but edge might not be registered in labelEdges
+        if (!edge.closure.getLabelEdges().contains(edge)) {
+          edge.closure.getLabelEdges().add(edge);
+        }
+      }
+    }
+  }
+
+  // Find a valid closure by walking up from the source until we find a statement
+  // that is in the tree, is not a BasicBlockStatement/RootStatement, and contains the source.
+  private static Statement findValidClosure(Statement source, Statement oldClosure, Set<Statement> treeStatements) {
+    // Walk up from the source's parent to find the nearest valid ancestor
+    Statement current = source.getParent();
+    while (current != null) {
+      if (treeStatements.contains(current)
+          && !(current instanceof BasicBlockStatement)
+          && !(current instanceof RootStatement)) {
+        return current;
+      }
+      current = current.getParent();
+    }
+    return null;
   }
 }

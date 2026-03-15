@@ -502,6 +502,14 @@ public class MethodProcessor implements Runnable {
       decompileRecord.add("ReplaceContinues", root);
     }
 
+    // RTF: final repair pass for orphaned label edges after all transformations.
+    // Edges may have their closure set but not be registered in the closure's
+    // labelEdges list, causing "break labelN;" to be emitted without a matching
+    // label declaration.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      LabelHelper.repairOrphanedLabels(root);
+    }
+
     // Mark oddities in the decompiled code (left behind monitors, <unknown> variables, etc.)
     // No decompile record as statement structure is not modified
     ExprProcessor.markExprOddities(root);
