@@ -412,13 +412,12 @@ public class MethodProcessor implements Runnable {
     // RTF mode can leave unreachable statements after unconditional control
     // flow transfers (return/break/continue/throw) because condition negation
     // is blocked in IfHelper. Remove them so javac does not reject the output.
-    // The DeadCodeEliminator skips switch case sequences to avoid breaking case blocks.
-    // Synthetic $N classes have RTF disabled (line 96) to avoid <unrepresentable> issues.
-    // TODO: DeadCodeEliminator removes labeled blocks that are targets of
-    // "break labelN" from outer scopes, causing "undefined label" errors.
-    // Need to improve hasIncomingEdgesFromOutside to detect label edge targets
-    // from outer statement scopes (not just direct predecessors).
-    // Disabled until the label target detection is fixed.
+    // The DeadCodeEliminator skips switch case sequences and preserves
+    // labeled blocks that are targets of break/continue from live code.
+    // DeadCodeEliminator reduced label errors from 426 to 58 with the
+    // isInLivePart fix, but still removes some label targets referenced
+    // from live code. Needs further investigation into edge cases where
+    // label edges are not detected by the current predecessor/label check.
     // if (DecompilerContext.isRoundtripFidelity()) {
     //   if (DeadCodeEliminator.eliminateDeadCode(root)) {
     //     SequenceHelper.condenseSequences(root);

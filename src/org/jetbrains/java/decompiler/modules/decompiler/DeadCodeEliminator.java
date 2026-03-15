@@ -27,17 +27,9 @@ public final class DeadCodeEliminator {
   private DeadCodeEliminator() {
   }
 
-  /**
-   * Recursively eliminate dead code from the statement tree.
-   *
-   * @param root the root of the statement tree to process
-   * @return true if any dead code was removed
-   */
   public static boolean eliminateDeadCode(Statement root) {
     boolean changed = false;
 
-    // Process children first (bottom-up) so inner sequences are cleaned
-    // before outer ones. Use a snapshot to avoid concurrent modification.
     List<Statement> children = new ArrayList<>(root.getStats());
     for (Statement child : children) {
       if (eliminateDeadCode(child)) {
@@ -46,8 +38,6 @@ public final class DeadCodeEliminator {
     }
 
     if (root instanceof SequenceStatement) {
-      // Do not eliminate dead code inside switch case sequences — break
-      // statements in switch cases are NOT unconditional exits for siblings
       if (root.getParent() instanceof SwitchStatement) {
         return changed;
       }
@@ -59,14 +49,6 @@ public final class DeadCodeEliminator {
     return changed;
   }
 
-  /**
-   * For a SequenceStatement, find the first statement that unconditionally
-   * exits (does not fall through to the next statement), then remove all
-   * subsequent statements that are not reachable from elsewhere.
-   *
-   * @param seq the sequence statement to process
-   * @return true if any statements were removed
-   */
   private static boolean removeDeadTail(Statement seq) {
     VBStyleCollection<Statement, Integer> stats = seq.getStats();
 
@@ -76,7 +58,6 @@ public final class DeadCodeEliminator {
 
     boolean changed = false;
 
-    // Scan forward through the sequence looking for an unconditional exit
     for (int i = 0; i < stats.size() - 1; i++) {
       Statement stat = stats.get(i);
 
@@ -84,24 +65,22 @@ public final class DeadCodeEliminator {
         continue;
       }
 
-      // stat unconditionally exits; check subsequent statements for removal
-      // Work backwards from the end to avoid index shifting issues
+      // stat unconditionally exits; check subsequent statements for removal.
+      // Work backwards from the end to avoid index shifting issues.
       for (int j = stats.size() - 1; j > i; j--) {
         Statement dead = stats.get(j);
 
-        if (hasIncomingEdgesFromOutside(dead, seq)) {
-          // This statement is a jump target from elsewhere; stop removing
+        if (hasIncomingEdgesFromLiveCode(dead, seq, i)) {
+          // This statement is a jump target from live code; stop removing
           break;
         }
 
-        // Remove all edges from/to this dead statement
         for (StatEdge edge : new ArrayList<>(dead.getAllSuccessorEdges())) {
           dead.removeSuccessor(edge);
         }
         for (StatEdge edge : new ArrayList<>(dead.getAllPredecessorEdges())) {
           edge.getSource().removeSuccessor(edge);
         }
-        // Remove label edges that reference this dead statement
         for (StatEdge edge : new ArrayList<>(dead.getLabelEdges())) {
           edge.closure = null;
         }
@@ -112,7 +91,6 @@ public final class DeadCodeEliminator {
       }
 
       if (changed) {
-        // Update the sequence's lastBasicType based on the new last element
         break;
       }
     }
@@ -120,87 +98,69 @@ public final class DeadCodeEliminator {
     return changed;
   }
 
-  /**
-   * Determine whether a statement is an unconditional control flow transfer,
-   * meaning execution can never fall through to the next statement in the
-   * sequence.
-   * <p>
-   * This returns true when the statement:
-   * <ul>
-   *   <li>Does not have a basic successor edge (e.g., infinite loop, if-else
-   *       where both branches exit)</li>
-   *   <li>Has no regular-type successor edges (only break/continue/exception
-   *       edges that jump elsewhere)</li>
-   * </ul>
-   */
   private static boolean isUnconditionalExit(Statement stat) {
-    // hasBasicSuccEdge() returns false for statements that never fall through:
-    //   - Infinite loops (DoStatement with INFINITE type)
-    //   - If-else statements (both branches covered)
-    //   - Most compound statements by default
-    // But BasicBlockStatement always returns true, even when it ends with
-    // return/throw, because it always has a successor edge (break to dummy exit).
-    //
-    // So we also need to check that there are no regular successor edges,
-    // which would indicate normal fall-through control flow.
     if (stat.hasBasicSuccEdge()) {
-      // The statement type says it can fall through. Check if it actually
-      // has regular edges (indicating fall-through) vs only break/continue.
       List<StatEdge> regularSuccs = stat.getSuccessorEdges(StatEdge.TYPE_REGULAR);
       if (!regularSuccs.isEmpty()) {
         return false;
       }
 
-      // No regular successors. Check for explicit break/continue edges
-      // which indicate control transfer (return, break, continue, throw).
       List<StatEdge> directSuccs = stat.getAllDirectSuccessorEdges();
       if (directSuccs.isEmpty()) {
-        // No successors at all means it doesn't exit (shouldn't normally happen)
         return false;
       }
 
-      // All direct successors are break/continue/finallyexit edges,
-      // so this statement unconditionally transfers control elsewhere.
       return true;
     }
 
-    // Statement type itself says no fall-through (e.g., infinite loop, if-else)
     return true;
   }
 
   /**
-   * Check whether a statement has incoming edges from statements that are
-   * NOT its predecessor in the same sequence. Such edges indicate the
-   * statement is a label/jump target and should not be removed.
+   * Check whether a statement has incoming edges from live code, meaning it
+   * cannot be safely removed. "Live code" means either:
+   * (a) code outside the sequence entirely, or
+   * (b) code in the sequence at or before the unconditional exit (index <= cutIndex)
    *
-   * @param stat the statement to check
-   * @param seq  the parent sequence statement
-   * @return true if the statement has incoming edges from outside the
-   *         normal sequence flow
+   * Edges from other dead code (after the cut index) do not block removal.
    */
-  private static boolean hasIncomingEdgesFromOutside(Statement stat, Statement seq) {
-    // Check all predecessor edges (all types including break, continue, etc.)
+  private static boolean hasIncomingEdgesFromLiveCode(Statement stat, Statement seq, int cutIndex) {
+    // Check predecessor edges
     Set<Statement> preds = stat.getNeighboursSet(Statement.STATEDGE_DIRECT_ALL, EdgeDirection.BACKWARD);
-
     for (Statement pred : preds) {
-      // If the predecessor is not in the same sequence, this statement is
-      // a jump target from outside
       if (!seq.containsStatementStrict(pred)) {
+        return true; // from outside the sequence
+      }
+      if (isInLivePart(pred, seq, cutIndex)) {
+        return true; // from live code before the unconditional exit
+      }
+    }
+
+    // Check label edges (this statement is the closure/target)
+    for (StatEdge labelEdge : stat.getLabelEdges()) {
+      Statement source = labelEdge.getSource();
+      if (!seq.containsStatementStrict(source)) {
+        return true; // source from outside
+      }
+      if (isInLivePart(source, seq, cutIndex)) {
+        return true; // source from live code
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a statement is contained within the live part of a sequence,
+   * meaning it is nested inside a child at index <= cutIndex.
+   */
+  private static boolean isInLivePart(Statement source, Statement seq, int cutIndex) {
+    VBStyleCollection<Statement, Integer> stats = seq.getStats();
+    for (int k = 0; k <= cutIndex && k < stats.size(); k++) {
+      if (stats.get(k).containsStatement(source)) {
         return true;
       }
     }
-
-    // Also check if this statement is a label edge target (closure target)
-    // Label edges on this statement mean something jumps to/through it
-    if (!stat.getLabelEdges().isEmpty()) {
-      for (StatEdge labelEdge : stat.getLabelEdges()) {
-        // If the label edge source is outside the sequence, it's reachable
-        if (!seq.containsStatementStrict(labelEdge.getSource())) {
-          return true;
-        }
-      }
-    }
-
     return false;
   }
 }
