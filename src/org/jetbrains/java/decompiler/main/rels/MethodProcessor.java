@@ -502,6 +502,15 @@ public class MethodProcessor implements Runnable {
       decompileRecord.add("ReplaceContinues", root);
     }
 
+    // RTF: run dead code elimination again after replaceContinueWithBreak,
+    // which can introduce continue statements that make subsequent code unreachable.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      if (DeadCodeEliminator.eliminateDeadCode(root)) {
+        SequenceHelper.condenseSequences(root);
+        decompileRecord.add("EliminateDeadCode_Post", root);
+      }
+    }
+
     // RTF: final repair pass for orphaned label edges after all transformations.
     // Edges may have their closure set but not be registered in the closure's
     // labelEdges list, causing "break labelN;" to be emitted without a matching

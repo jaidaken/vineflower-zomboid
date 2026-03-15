@@ -1,6 +1,7 @@
 // Copyright 2000-2024 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license that can be found in the LICENSE file.
 package org.jetbrains.java.decompiler.modules.decompiler;
 
+import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement.EdgeDirection;
@@ -102,6 +103,17 @@ public final class DeadCodeEliminator {
     if (stat.hasBasicSuccEdge()) {
       List<StatEdge> regularSuccs = stat.getSuccessorEdges(StatEdge.TYPE_REGULAR);
       if (!regularSuccs.isEmpty()) {
+        // In RTF mode after replaceContinueWithBreak, a basic block may have
+        // a stale regular successor edge even though it ends with continue/break.
+        // Check if the statement also has break/continue edges — if so, the
+        // regular edge is stale and this is an unconditional exit.
+        if (DecompilerContext.isRoundtripFidelity()) {
+          List<StatEdge> breakSuccs = stat.getSuccessorEdges(StatEdge.TYPE_BREAK);
+          List<StatEdge> contSuccs = stat.getSuccessorEdges(StatEdge.TYPE_CONTINUE);
+          if (!breakSuccs.isEmpty() || !contSuccs.isEmpty()) {
+            return true;
+          }
+        }
         return false;
       }
 
