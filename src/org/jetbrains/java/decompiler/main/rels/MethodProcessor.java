@@ -360,6 +360,18 @@ public class MethodProcessor implements Runnable {
         continue;
       }
 
+      // After try-with-resources reconstruction is complete (enhanceTryStats
+      // returned false), inline temp return variables left over from JDK 9+
+      // try-with-resources desugaring. The pattern:
+      //   try (...) { ...; var = value; }  return var;
+      // becomes:
+      //   try (...) { ...; return value; }
+      if (root.hasTryCatch() && TryHelper.inlineTwrReturnVars(root)) {
+        SequenceHelper.condenseSequences(root);
+        decompileRecord.add("InlineTwrReturnVars", root);
+        continue;
+      }
+
       if (InlineSingleBlockHelper.inlineSingleBlocks(root)) {
         decompileRecord.add("InlineSingleBlocks", root);
         continue;
@@ -402,12 +414,17 @@ public class MethodProcessor implements Runnable {
     // is blocked in IfHelper. Remove them so javac does not reject the output.
     // The DeadCodeEliminator skips switch case sequences to avoid breaking case blocks.
     // Synthetic $N classes have RTF disabled (line 96) to avoid <unrepresentable> issues.
-    if (DecompilerContext.isRoundtripFidelity()) {
-      if (DeadCodeEliminator.eliminateDeadCode(root)) {
-        SequenceHelper.condenseSequences(root);
-        decompileRecord.add("EliminateDeadCode", root);
-      }
-    }
+    // TODO: DeadCodeEliminator removes labeled blocks that are targets of
+    // "break labelN" from outer scopes, causing "undefined label" errors.
+    // Need to improve hasIncomingEdgesFromOutside to detect label edge targets
+    // from outer statement scopes (not just direct predecessors).
+    // Disabled until the label target detection is fixed.
+    // if (DecompilerContext.isRoundtripFidelity()) {
+    //   if (DeadCodeEliminator.eliminateDeadCode(root)) {
+    //     SequenceHelper.condenseSequences(root);
+    //     decompileRecord.add("EliminateDeadCode", root);
+    //   }
+    // }
 
     // this has to be done after all inlining is done so the case values do not get reverted
     if (root.hasSwitch() && SwitchHelper.simplifySwitches(root, mt, root)) {

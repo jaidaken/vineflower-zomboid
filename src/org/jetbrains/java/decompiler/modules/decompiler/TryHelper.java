@@ -1,6 +1,6 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
-import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.struct.StructClass;
 
@@ -19,6 +19,9 @@ public class TryHelper {
           SequenceHelper.condenseSequences(root);
         }
       }
+
+      // NOTE: TWR temp return variable inlining is handled by inlineTwrReturnVars()
+      // which is called from the main loop after StackVarsProcessor has simplified.
     }
 
     if (cl.getVersion().hasNewTryWithResources()) {
@@ -135,6 +138,98 @@ public class TryHelper {
     }
 
     return false;
+  }
+
+  // Inline temp return variables left over from try-with-resources desugaring.
+  //
+  // After JDK 9+ try-with-resources reconstruction, we may have:
+  //   try (...) { ...; var = value; }
+  //   return var;
+  // This inlines it to:
+  //   try (...) { ...; return value; }
+  //
+  public static boolean inlineTwrReturnVars(Statement stat) {
+    boolean changed = false;
+
+    for (Statement st : new ArrayList<>(stat.getStats())) {
+      if (inlineTwrReturnVars(st)) {
+        changed = true;
+      }
+    }
+
+    if (stat instanceof SequenceStatement) {
+      for (int i = 0; i < stat.getStats().size() - 1; i++) {
+        Statement curr = stat.getStats().get(i);
+        Statement next = stat.getStats().get(i + 1);
+
+        // Check: curr is a try-with-resources (CatchStatement with resources)
+        // and next is a basic block with a single return expression
+        if (curr instanceof CatchStatement catchStat
+            && !catchStat.getResources().isEmpty()
+            && next instanceof BasicBlockStatement
+            && next.getExprents() != null
+            && next.getExprents().size() == 1
+            && next.getExprents().get(0) instanceof ExitExprent exitExpr
+            && exitExpr.getExitType() == ExitExprent.Type.RETURN
+            && exitExpr.getValue() instanceof VarExprent returnVar) {
+
+          // Find the last basic block in the try body that ends with an
+          // assignment to the same variable
+          Statement tryBody = catchStat.getFirst();
+          Statement lastInBody = findLastStatement(tryBody);
+
+          if (lastInBody != null
+              && lastInBody.getExprents() != null
+              && !lastInBody.getExprents().isEmpty()) {
+            List<Exprent> bodyExprents = lastInBody.getExprents();
+            Exprent lastExpr = bodyExprents.get(bodyExprents.size() - 1);
+
+            if (lastExpr instanceof AssignmentExprent assignment
+                && assignment.getCondType() == null
+                && assignment.getLeft() instanceof VarExprent assignVar
+                && assignVar.equals(returnVar)) {
+
+              // Replace the assignment with a return of the assigned value
+              ExitExprent newReturn = (ExitExprent) exitExpr.copy();
+              newReturn.replaceExprent(newReturn.getValue(), assignment.getRight().copy());
+              bodyExprents.set(bodyExprents.size() - 1, newReturn);
+
+              // Remove the return statement after the try
+              next.getExprents().clear();
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+
+    return changed;
+  }
+
+  // Walk the statement tree to find the last statement in the normal
+  // execution path (the deepest "last" statement in a chain of sequences).
+  private static Statement findLastStatement(Statement stat) {
+    if (stat instanceof SequenceStatement) {
+      Statement last = stat.getStats().get(stat.getStats().size() - 1);
+      return findLastStatement(last);
+    }
+
+    // For try/try-with-resources, the last statement in the try body
+    // is the last in the normal execution path.
+    if (stat instanceof CatchStatement) {
+      return findLastStatement(((CatchStatement) stat).getFirst());
+    }
+
+    // For if statements where the if-body returns and the fall-through
+    // continues, the last statement is the statement itself (which may
+    // have exprents after the if).
+    if (stat.getExprents() != null) {
+      return stat;
+    }
+
+    // For compound statements without exprents (like an if-then without
+    // else), return null - we can't safely determine the last expression.
+    return null;
   }
 
   private static boolean collapseTryRec(Statement stat) {
