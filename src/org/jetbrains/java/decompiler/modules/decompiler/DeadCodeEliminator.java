@@ -2,6 +2,9 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
 import org.jetbrains.java.decompiler.main.DecompilerContext;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.BasicBlockStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement.EdgeDirection;
@@ -103,15 +106,34 @@ public final class DeadCodeEliminator {
     if (stat.hasBasicSuccEdge()) {
       List<StatEdge> regularSuccs = stat.getSuccessorEdges(StatEdge.TYPE_REGULAR);
       if (!regularSuccs.isEmpty()) {
-        // In RTF mode after replaceContinueWithBreak, a basic block may have
-        // a stale regular successor edge even though it ends with continue/break.
-        // Check if the statement also has break/continue edges — if so, the
-        // regular edge is stale and this is an unconditional exit.
+        // In RTF mode, check if the statement also has break/continue edges
+        // or if its exprents contain a return/throw (exprent-level control transfer
+        // that the statement edge graph doesn't reflect).
         if (DecompilerContext.isRoundtripFidelity()) {
           List<StatEdge> breakSuccs = stat.getSuccessorEdges(StatEdge.TYPE_BREAK);
           List<StatEdge> contSuccs = stat.getSuccessorEdges(StatEdge.TYPE_CONTINUE);
           if (!breakSuccs.isEmpty() || !contSuccs.isEmpty()) {
             return true;
+          }
+          for (StatEdge edge : stat.getAllDirectSuccessorEdges()) {
+            if (edge.getType() != StatEdge.TYPE_REGULAR) {
+              return true;
+            }
+          }
+          // Check if the PARENT sequence or loop has a continue/break edge
+          // that makes this the effective last statement
+          Statement parent = stat.getParent();
+          if (parent != null) {
+            for (StatEdge pedge : parent.getAllDirectSuccessorEdges()) {
+              if (pedge.getType() != StatEdge.TYPE_REGULAR) {
+                // Parent has a non-regular edge (continue/break)
+                // If this statement is the last in the parent's stats,
+                // everything after it in the outer sequence is unreachable
+                if (parent.getStats().getLast() == stat) {
+                  return true;
+                }
+              }
+            }
           }
         }
         return false;
