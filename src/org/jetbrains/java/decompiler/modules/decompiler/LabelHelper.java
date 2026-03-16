@@ -607,6 +607,16 @@ public final class LabelHelper {
               // Add labeled edge to the closure
               minclosure.addLabeledEdge(edge);
 
+              // RTF: remove stale regular successor edges from the source.
+              // The continue->break conversion makes subsequent statements
+              // unreachable, but the old regular edge remains, preventing
+              // the DeadCodeEliminator from detecting the unconditional exit.
+              if (DecompilerContext.isRoundtripFidelity()) {
+                for (StatEdge regEdge : new ArrayList<>(edge.getSource().getSuccessorEdges(StatEdge.TYPE_REGULAR))) {
+                  edge.getSource().removeSuccessor(regEdge);
+                }
+              }
+
               // Don't process this edge again
               seenEdges.add(edge);
 
