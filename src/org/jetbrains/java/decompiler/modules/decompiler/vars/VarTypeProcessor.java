@@ -187,6 +187,18 @@ public class VarTypeProcessor {
             // Primitive LVT types are unreliable: JVM uses int for boolean/byte/short/char,
             // so pinning would force int where byte/boolean is needed.
             if (lvtType.type == CodeType.OBJECT) {
+              // Don't pin if the proposed type is incompatible with the LVT type.
+              // This handles variables reassigned to different subtypes (e.g., a variable
+              // declared as IsoWindow in LVT but also assigned from IsoThumpable).
+              if (newType.type == CodeType.OBJECT && newType.value != null && lvtType.value != null
+                  && !newType.value.equals(lvtType.value)) {
+                boolean compatible = DecompilerContext.getStructContext() != null
+                    && DecompilerContext.getStructContext().instanceOf(newType.value, lvtType.value);
+                if (!compatible) {
+                  // Fall through to normal type processing — the variable needs a wider type
+                  return changeVarExprentType(exprent, newType, minMax, new VarVersionPair(varExpr));
+                }
+              }
               VarVersionPair varPair = new VarVersionPair(varExpr);
               mapExprentMinTypes.put(varPair, lvtType);
               mapExprentMaxTypes.put(varPair, lvtType);
