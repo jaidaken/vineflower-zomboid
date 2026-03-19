@@ -123,6 +123,23 @@ public class SequenceStatement extends Statement {
           && endsWithNonRegularExit(st)) {
         break;
       }
+
+      // RTF: a try-finally can make subsequent siblings unreachable in two ways:
+      // 1. The finally handler itself returns, overriding any try-body completion.
+      // 2. All paths in the try body return/throw, so the finally just cleans up
+      //    and the method exits from within the try-finally.
+      // For case 1, check if the handler ends with a return (not throw — throw
+      // is normal re-throw behavior for finally handlers).
+      // For case 2, check if the CatchAllStatement has no successor edges at all,
+      // which means all execution paths exit internally.
+      if (DecompilerContext.isRoundtripFidelity() && i < stats.size() - 1
+          && st instanceof CatchAllStatement && ((CatchAllStatement) st).isFinally()) {
+        CatchAllStatement cas = (CatchAllStatement) st;
+        if (handlerEndsWithReturn(cas.getHandler())
+            || cas.getSuccessorEdges(STATEDGE_DIRECT_ALL).isEmpty()) {
+          break;
+        }
+      }
     }
 
     if (islabeled) {
@@ -151,6 +168,26 @@ public class SequenceStatement extends Statement {
       }
     }
 
+    // A SwitchStatement with an explicit default case and no outgoing successor
+    // edges: all execution paths exit via throw/return, so subsequent siblings
+    // are unreachable.
+    if (succs.isEmpty() && stat instanceof SwitchStatement) {
+      SwitchStatement sw = (SwitchStatement) stat;
+      boolean hasExplicitDefault = false;
+      for (List<StatEdge> edges : sw.getCaseEdges()) {
+        for (StatEdge edge : edges) {
+          if (edge == sw.getDefaultEdge()) {
+            hasExplicitDefault = true;
+            break;
+          }
+        }
+        if (hasExplicitDefault) break;
+      }
+      if (hasExplicitDefault) {
+        return true;
+      }
+    }
+
     // For sequence statements, check the last child recursively
     if (stat instanceof SequenceStatement) {
       VBStyleCollection<Statement, Integer> children = stat.getStats();
@@ -165,6 +202,32 @@ public class SequenceStatement extends Statement {
       Object lastExpr = stat.getExprents().get(stat.getExprents().size() - 1);
       if (lastExpr instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent) {
         return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a finally handler ends with a return statement (not a throw).
+   * Normal finally handlers re-throw the caught exception (ending with throw),
+   * but a finally block that contains a return statement overrides all exits,
+   * making code after the try-finally unreachable.
+   */
+  private static boolean handlerEndsWithReturn(Statement handler) {
+    // For sequences, check the last child
+    if (handler instanceof SequenceStatement) {
+      VBStyleCollection<Statement, Integer> children = handler.getStats();
+      if (!children.isEmpty()) {
+        return handlerEndsWithReturn(children.getLast());
+      }
+    }
+
+    if (handler.getExprents() != null && !handler.getExprents().isEmpty()) {
+      Object lastExpr = handler.getExprents().get(handler.getExprents().size() - 1);
+      if (lastExpr instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent) {
+        return ((org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent) lastExpr).getExitType()
+            == org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent.Type.RETURN;
       }
     }
 

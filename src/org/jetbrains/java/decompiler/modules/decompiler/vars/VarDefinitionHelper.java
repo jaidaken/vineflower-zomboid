@@ -231,7 +231,8 @@ public class VarDefinitionHelper {
       }
 
       if (!defset) {
-        VarExprent var = new VarExprent(index, varproc.getVarType(new VarVersionPair(index, 0)), varproc);
+        VarType varType = varproc.getVarType(new VarVersionPair(index, 0));
+        VarExprent var = new VarExprent(index, varType, varproc);
         var.setDefinition(true);
 
         LocalVariable lvt = findLVT(index, stat);
@@ -239,7 +240,20 @@ public class VarDefinitionHelper {
           var.setLVT(lvt);
         }
 
-        lst.add(addindex, var);
+        // For reference types (objects and arrays), initialize to null to prevent
+        // "variable might not have been initialized" compilation errors that arise
+        // when the decompiler's structural analysis creates control flow paths where
+        // Java's definite assignment analysis cannot prove initialization.
+        if (varType.type == CodeType.OBJECT || varType.arrayDim > 0) {
+          AssignmentExprent assign = new AssignmentExprent(
+            var,
+            new ConstExprent(VarType.VARTYPE_NULL, null, null),
+            null
+          );
+          lst.add(addindex, assign);
+        } else {
+          lst.add(addindex, var);
+        }
       }
     }
 
