@@ -451,14 +451,21 @@ public final class ExitHelper {
         return false;
 
       case TRY_CATCH:
-      case CATCH_ALL:
-        // All branches (try + catch) must end with return
+        // All branches (try body + all catch handlers) must end with return
         for (Statement sub : stat.getStats()) {
           if (!statementEndsWithReturn(sub)) {
             return false;
           }
         }
         return !stat.getStats().isEmpty();
+
+      case CATCH_ALL:
+        // For try-finally / try-catch-finally: only the try body (first child)
+        // needs all paths returning. The finally handler always runs before the
+        // method returns, but doesn't need to itself end with a return.
+        // The first child may be a CatchStatement (try-catch-finally) whose
+        // own branches (try + catch) are checked recursively.
+        return statementEndsWithReturn(stat.getFirst());
 
       case DO:
         // Infinite loops always "return" in the sense that they don't fall through

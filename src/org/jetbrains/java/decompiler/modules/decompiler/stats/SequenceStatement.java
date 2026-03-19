@@ -130,13 +130,16 @@ public class SequenceStatement extends Statement {
       //    and the method exits from within the try-finally.
       // For case 1, check if the handler ends with a return (not throw — throw
       // is normal re-throw behavior for finally handlers).
-      // For case 2, check if the CatchAllStatement has no successor edges at all,
-      // which means all execution paths exit internally.
+      // For case 2, check if the CatchAllStatement has no successor edges AND
+      // all paths in the try body actually exit. Just checking for empty successor
+      // edges is insufficient — a try-catch-finally where the catch branch doesn't
+      // return will have no successor edges but still needs a trailing return.
       if (DecompilerContext.isRoundtripFidelity() && i < stats.size() - 1
           && st instanceof CatchAllStatement && ((CatchAllStatement) st).isFinally()) {
         CatchAllStatement cas = (CatchAllStatement) st;
         if (handlerEndsWithReturn(cas.getHandler())
-            || cas.getSuccessorEdges(STATEDGE_DIRECT_ALL).isEmpty()) {
+            || (cas.getSuccessorEdges(STATEDGE_DIRECT_ALL).isEmpty()
+                && allPathsExit(cas.getFirst()))) {
           break;
         }
       }
@@ -218,6 +221,88 @@ public class SequenceStatement extends Statement {
     }
 
     return false;
+  }
+
+  /**
+   * Check if ALL execution paths through a statement end with a return or throw.
+   * Unlike endsWithNonRegularExit (which checks edge-graph properties for
+   * detecting unreachable-statement patterns), this method checks the actual
+   * statement structure to determine if every code path exits.
+   *
+   * Used by the try-finally suppression check: a try-finally only makes
+   * subsequent siblings unreachable if every path in the try body returns/throws.
+   * For try-catch-finally, this means checking ALL catch handlers too.
+   */
+  private static boolean allPathsExit(Statement stat) {
+    if (stat == null) {
+      return false;
+    }
+
+    // Basic block: check if last exprent is a return or throw
+    if (stat.getExprents() != null) {
+      List<org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent> exprents = stat.getExprents();
+      if (!exprents.isEmpty()) {
+        Object last = exprents.get(exprents.size() - 1);
+        if (last instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    switch (stat.type) {
+      case SEQUENCE:
+        List<Statement> seqStats = stat.getStats();
+        if (seqStats.isEmpty()) return false;
+        return allPathsExit(seqStats.get(seqStats.size() - 1));
+
+      case IF:
+        IfStatement ifStat = (IfStatement) stat;
+        if (ifStat.iftype == IfStatement.IFTYPE_IFELSE) {
+          return allPathsExit(ifStat.getIfstat())
+              && allPathsExit(ifStat.getElsestat());
+        }
+        return false;
+
+      case TRY_CATCH:
+        // All branches (try body + all catch handlers) must exit
+        for (Statement sub : stat.getStats()) {
+          if (!allPathsExit(sub)) {
+            return false;
+          }
+        }
+        return !stat.getStats().isEmpty();
+
+      case CATCH_ALL:
+        // For try-finally: the try body must exit on all paths
+        // (the finally handler runs but doesn't change whether paths exit)
+        return allPathsExit(stat.getFirst());
+
+      case SWITCH:
+        SwitchStatement swStat = (SwitchStatement) stat;
+        List<Statement> caseStmts = swStat.getCaseStatements();
+        if (caseStmts.isEmpty()) return false;
+        for (Statement caseStat : caseStmts) {
+          if (!allPathsExit(caseStat)) {
+            return false;
+          }
+        }
+        return true;
+
+      case DO:
+        DoStatement doStat = (DoStatement) stat;
+        if (doStat.getLooptype() == DoStatement.Type.INFINITE) {
+          return true;
+        }
+        return false;
+
+      case SYNCHRONIZED:
+        SynchronizedStatement synStat = (SynchronizedStatement) stat;
+        return allPathsExit(synStat.getBody());
+
+      default:
+        return false;
+    }
   }
 
   /**
