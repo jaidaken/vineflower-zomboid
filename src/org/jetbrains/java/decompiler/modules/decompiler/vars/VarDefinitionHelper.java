@@ -1412,7 +1412,15 @@ public class VarDefinitionHelper {
     if (!stat.getVarDefinitions().isEmpty()) {
       if (stat instanceof DoStatement) {
         for (Exprent var : stat.getVarDefinitions()) {
-          unInitialized.add(new VarVersionPair((VarExprent)var));
+          if (var instanceof VarExprent) {
+            unInitialized.add(new VarVersionPair((VarExprent)var));
+          } else if (var instanceof AssignmentExprent) {
+            // RTF mode: definitions may be AssignmentExprent (e.g. Object x = null)
+            Exprent left = ((AssignmentExprent)var).getLeft();
+            if (left instanceof VarExprent) {
+              unInitialized.add(new VarVersionPair((VarExprent)left));
+            }
+          }
         }
       }
     }
