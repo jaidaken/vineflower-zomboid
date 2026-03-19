@@ -204,10 +204,33 @@ public final class IfPatternMatchProcessor {
       }
     }
 
-    // Also check for self-shadowing: if the source expression is the same
-    // variable slot as the pattern target, don't create pattern variable
-    if (source instanceof VarExprent && ((VarExprent) source).getIndex() == ((VarExprent) left).getIndex()) {
+    // Check for name/index collision: if the pattern variable's index matches
+    // any variable used in the ENTIRE if-condition (not just the instanceof source),
+    // the pattern variable would shadow it, causing "already defined" errors.
+    // This catches cases like: fromTable(KahluaTable tablex) where the instanceof
+    // pattern would create a second "tablex" variable.
+    int patternIndex = ((VarExprent) left).getIndex();
+    // Check all exprents in the if-statement's condition
+    IfStatement ifStat = null;
+    Statement p = branch.getParent();
+    if (p instanceof IfStatement) {
+      ifStat = (IfStatement) p;
+    }
+    if (ifStat != null && ifStat.getHeadexprent() != null) {
+      for (Exprent sub : ifStat.getHeadexprent().getAllExprents(true, true)) {
+        if (sub instanceof VarExprent && ((VarExprent) sub).getIndex() == patternIndex) {
+          return false;
+        }
+      }
+    }
+    // Also check the source expression directly
+    if (source instanceof VarExprent && ((VarExprent) source).getIndex() == patternIndex) {
       return false;
+    }
+    for (Exprent sub : source.getAllExprents(true, true)) {
+      if (sub instanceof VarExprent && ((VarExprent) sub).getIndex() == patternIndex) {
+        return false;
+      }
     }
 
     VarType storeType = left.getInferredExprType(null);
