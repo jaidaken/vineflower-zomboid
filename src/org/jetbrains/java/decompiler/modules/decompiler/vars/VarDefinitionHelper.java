@@ -152,8 +152,54 @@ public class VarDefinitionHelper {
     ValidationHelper.validateVars(graph, root, var -> var.getVarType() != VarType.VARTYPE_UNKNOWN, "Var type not set!");
   }
 
+  // Counts how many times each variable index is assigned in the statement tree.
+  // Used by RTF Object→var logic to avoid 'var' for reassigned variables.
+  private Set<Integer> multiAssignedVars;
+
+  private Set<Integer> findMultiAssignedVars(Statement root) {
+    Map<Integer, Integer> assignCounts = new HashMap<>();
+    countAssignments(root, assignCounts);
+    Set<Integer> result = new HashSet<>();
+    for (Map.Entry<Integer, Integer> e : assignCounts.entrySet()) {
+      if (e.getValue() > 1) {
+        result.add(e.getKey());
+      }
+    }
+    return result;
+  }
+
+  private void countAssignments(Statement stat, Map<Integer, Integer> counts) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (expr instanceof AssignmentExprent) {
+          Exprent left = ((AssignmentExprent) expr).getLeft();
+          if (left instanceof VarExprent) {
+            int idx = ((VarExprent) left).getIndex();
+            counts.merge(idx, 1, Integer::sum);
+          }
+        }
+      }
+    }
+    for (Statement child : stat.getStats()) {
+      countAssignments(child, counts);
+    }
+    // Also check loop init/inc exprents
+    if (stat instanceof DoStatement) {
+      DoStatement ds = (DoStatement) stat;
+      if (ds.getInitExprent() instanceof AssignmentExprent) {
+        Exprent left = ((AssignmentExprent) ds.getInitExprent()).getLeft();
+        if (left instanceof VarExprent) {
+          counts.merge(((VarExprent) left).getIndex(), 1, Integer::sum);
+        }
+      }
+    }
+  }
+
   public void setVarDefinitions() {
     VarNamesCollector vc = varproc.getVarNamesCollector();
+
+    // Pre-pass: find variables that are assigned more than once
+    multiAssignedVars = findMultiAssignedVars(root);
 
     for (Entry<Integer, Statement> en : mapVarDefStatements.entrySet()) {
       Statement stat = en.getValue();
@@ -455,11 +501,27 @@ public class VarDefinitionHelper {
 
   private boolean setDefinition(Exprent expr, int index) {
     if (expr instanceof AssignmentExprent) {
-      Exprent left = ((AssignmentExprent)expr).getLeft();
+      AssignmentExprent assign = (AssignmentExprent) expr;
+      Exprent left = assign.getLeft();
       if (left instanceof VarExprent) {
         VarExprent var = (VarExprent)left;
         if (var.getIndex() == index) {
           var.setDefinition(true);
+          // RTF: when a variable is typed as Object, initialized from a method
+          // call/field/array access, and NOT reassigned later, render as 'var'
+          // so javac infers the correct erased type from the RHS.
+          if (DecompilerContext.isRoundtripFidelity() && multiAssignedVars != null
+              && !multiAssignedVars.contains(index)) {
+            VarType varType = var.getVarType();
+            if (varType != null && "java/lang/Object".equals(varType.value) && varType.arrayDim == 0) {
+              Exprent right = assign.getRight();
+              if (right instanceof InvocationExprent
+                  || right instanceof FieldExprent
+                  || right instanceof ArrayExprent) {
+                var.setUseVar(true);
+              }
+            }
+          }
           return true;
         }
       }
