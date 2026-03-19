@@ -648,6 +648,15 @@ public class InvocationExprent extends Exprent {
       }
     }
 
+    // clone() on arrays returns the array type, not Object.
+    // The JVM descriptor says ()Ljava/lang/Object; but the actual type is the array type.
+    if ("clone".equals(name) && "()Ljava/lang/Object;".equals(stringDescriptor) && instance != null) {
+      VarType instType = instance.getExprType();
+      if (instType.arrayDim > 0) {
+        return instType;
+      }
+    }
+
     return getExprType();
   }
 

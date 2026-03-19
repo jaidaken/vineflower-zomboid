@@ -195,6 +195,21 @@ public final class IfPatternMatchProcessor {
       }
     }
     
+    // RTF: check if the pattern variable would escape the if-block scope.
+    // If the variable is used in sibling statements after the if-block,
+    // don't create a pattern variable — it would be out of scope.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      if (isVarUsedAfterBranch(var, branch)) {
+        return false;
+      }
+    }
+
+    // Also check for self-shadowing: if the source expression is the same
+    // variable slot as the pattern target, don't create pattern variable
+    if (source instanceof VarExprent && ((VarExprent) source).getIndex() == ((VarExprent) left).getIndex()) {
+      return false;
+    }
+
     VarType storeType = left.getInferredExprType(null);
 
     // Add the exprent to the instanceof exprent and remove it from the inside of the if statement
@@ -690,5 +705,81 @@ public final class IfPatternMatchProcessor {
     }
 
     return res;
+  }
+
+  /**
+   * Check if a variable is used in statements after the given branch (if-block).
+   * If the variable escapes the if-block scope, pattern matching is unsafe.
+   */
+  private static boolean isVarUsedAfterBranch(VarVersionPair var, Statement branch) {
+    // Find the parent sequence containing the branch
+    Statement parent = branch.getParent();
+    if (parent == null) return false;
+
+    // Walk siblings after the branch in the parent
+    boolean foundBranch = false;
+    for (Statement sibling : parent.getStats()) {
+      if (sibling == branch) {
+        foundBranch = true;
+        continue;
+      }
+      if (foundBranch) {
+        if (containsVar(sibling, var.var)) {
+          return true;
+        }
+      }
+    }
+
+    // Also check the parent's parent (the variable might be used at a higher scope)
+    Statement grandparent = parent.getParent();
+    if (grandparent != null) {
+      boolean foundParent = false;
+      for (Statement sibling : grandparent.getStats()) {
+        if (sibling == parent) {
+          foundParent = true;
+          continue;
+        }
+        if (foundParent) {
+          if (containsVar(sibling, var.var)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  private static boolean containsVar(Statement stat, int varIndex) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (containsVarInExprent(expr, varIndex)) return true;
+      }
+    }
+    for (Statement child : stat.getStats()) {
+      if (containsVar(child, varIndex)) return true;
+    }
+    // Check loop/if condition/init/inc exprents
+    if (stat instanceof DoStatement) {
+      DoStatement ds = (DoStatement) stat;
+      if (ds.getConditionExprent() != null && containsVarInExprent(ds.getConditionExprent(), varIndex)) return true;
+      if (ds.getInitExprent() != null && containsVarInExprent(ds.getInitExprent(), varIndex)) return true;
+      if (ds.getIncExprent() != null && containsVarInExprent(ds.getIncExprent(), varIndex)) return true;
+    }
+    if (stat instanceof IfStatement) {
+      IfStatement is = (IfStatement) stat;
+      if (is.getHeadexprent() != null && containsVarInExprent(is.getHeadexprent(), varIndex)) return true;
+    }
+    return false;
+  }
+
+  private static boolean containsVarInExprent(Exprent expr, int varIndex) {
+    if (expr instanceof VarExprent && ((VarExprent) expr).getIndex() == varIndex) {
+      return true;
+    }
+    for (Exprent sub : expr.getAllExprents()) {
+      if (containsVarInExprent(sub, varIndex)) return true;
+    }
+    return false;
   }
 }
