@@ -223,7 +223,13 @@ public class FieldExprent extends Exprent {
 
     buf.addBytecodeMapping(bytecode);
 
-    buf.appendField(name, false, classname, name, descriptor);
+    // RTF: rename $assertionsDisabled to _assertionsDisabled in field references.
+    // The $ prefix is a compiler-synthesized convention not suitable for source.
+    String renderedName = name;
+    if (DecompilerContext.isRoundtripFidelity() && "$assertionsDisabled".equals(name)) {
+      renderedName = "_assertionsDisabled";
+    }
+    buf.appendField(renderedName, false, classname, renderedName, descriptor);
 
     return buf;
   }

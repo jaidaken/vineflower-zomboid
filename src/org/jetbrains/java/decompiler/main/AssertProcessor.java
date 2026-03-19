@@ -28,6 +28,12 @@ public final class AssertProcessor {
   private static final VarType CLASS_ASSERTION_ERROR = new VarType(CodeType.OBJECT, 0, "java/lang/AssertionError");
 
   public static void buildAssertions(ClassNode node) {
+    // RTF: don't convert if-throw to assert keywords. Keep the explicit
+    // assertion pattern for bytecode fidelity. The field rename ($->_)
+    // is handled in FieldExprent.toJava() and ClassWriter.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      return;
+    }
 
     ClassWrapper wrapper = node.getWrapper();
 

@@ -418,7 +418,12 @@ public class ClassWriter implements StatementWriter {
       }
 
       for (StructField fd : cl.getFields()) {
-        boolean hide = fd.isSynthetic() && DecompilerContext.getOption(IFernflowerPreferences.REMOVE_SYNTHETIC) ||
+        boolean isSyntheticHide = fd.isSynthetic() && DecompilerContext.getOption(IFernflowerPreferences.REMOVE_SYNTHETIC);
+        // RTF: don't hide $assertionsDisabled — needed for explicit assertion checks
+        if (isSyntheticHide && DecompilerContext.isRoundtripFidelity() && "$assertionsDisabled".equals(fd.getName())) {
+          isSyntheticHide = false;
+        }
+        boolean hide = isSyntheticHide ||
                        wrapper.getHiddenMembers().contains(InterpreterUtil.makeUniqueKey(fd.getName(), fd.getDescriptor())) || deferredEnumFields.contains(fd);
         if (hide) continue;
 
@@ -823,6 +828,10 @@ public class ClassWriter implements StatementWriter {
     }
 
     String name = fd.getName();
+    // RTF: rename $assertionsDisabled to _assertionsDisabled in field declaration
+    if (DecompilerContext.isRoundtripFidelity() && "$assertionsDisabled".equals(name)) {
+      name = "_assertionsDisabled";
+    }
     if (interceptor != null) {
       String newName = interceptor.getName(cl.qualifiedName + " " + fd.getName() + " " + fd.getDescriptor());
 
