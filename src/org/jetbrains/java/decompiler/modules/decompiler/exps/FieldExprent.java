@@ -223,11 +223,25 @@ public class FieldExprent extends Exprent {
 
     buf.addBytecodeMapping(bytecode);
 
-    // RTF: rename $assertionsDisabled to _assertionsDisabled in field references.
-    // The $ prefix is a compiler-synthesized convention not suitable for source.
+    // RTF: rename fields that would cause compilation issues
     String renderedName = name;
-    if (DecompilerContext.isRoundtripFidelity() && "$assertionsDisabled".equals(name)) {
-      renderedName = "_assertionsDisabled";
+    if (DecompilerContext.isRoundtripFidelity()) {
+      // Rename $assertionsDisabled to _assertionsDisabled
+      if ("$assertionsDisabled".equals(name)) {
+        renderedName = "_assertionsDisabled";
+      }
+      // Rename static fields that shadow their declaring class name
+      // (e.g., RenderThread.RenderThread → RenderThread.s_renderThread)
+      else if (isStatic && classname != null) {
+        String simpleClassName = classname.substring(classname.lastIndexOf('/') + 1);
+        // Handle inner classes: take the part after the last $
+        if (simpleClassName.contains("$")) {
+          simpleClassName = simpleClassName.substring(simpleClassName.lastIndexOf('$') + 1);
+        }
+        if (name.equals(simpleClassName)) {
+          renderedName = "s_" + Character.toLowerCase(name.charAt(0)) + name.substring(1);
+        }
+      }
     }
     buf.appendField(renderedName, false, classname, renderedName, descriptor);
 

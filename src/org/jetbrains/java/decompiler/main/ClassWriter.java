@@ -828,9 +828,21 @@ public class ClassWriter implements StatementWriter {
     }
 
     String name = fd.getName();
-    // RTF: rename $assertionsDisabled to _assertionsDisabled in field declaration
-    if (DecompilerContext.isRoundtripFidelity() && "$assertionsDisabled".equals(name)) {
-      name = "_assertionsDisabled";
+    if (DecompilerContext.isRoundtripFidelity()) {
+      // Rename $assertionsDisabled to _assertionsDisabled
+      if ("$assertionsDisabled".equals(name)) {
+        name = "_assertionsDisabled";
+      }
+      // Rename static fields that shadow their declaring class name
+      else if (fd.hasModifier(CodeConstants.ACC_STATIC)) {
+        String simpleClassName = cl.qualifiedName.substring(cl.qualifiedName.lastIndexOf('/') + 1);
+        if (simpleClassName.contains("$")) {
+          simpleClassName = simpleClassName.substring(simpleClassName.lastIndexOf('$') + 1);
+        }
+        if (name.equals(simpleClassName)) {
+          name = "s_" + Character.toLowerCase(name.charAt(0)) + name.substring(1);
+        }
+      }
     }
     if (interceptor != null) {
       String newName = interceptor.getName(cl.qualifiedName + " " + fd.getName() + " " + fd.getDescriptor());
