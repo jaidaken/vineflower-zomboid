@@ -2,9 +2,6 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
 import org.jetbrains.java.decompiler.main.DecompilerContext;
-import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
-import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
-import org.jetbrains.java.decompiler.modules.decompiler.stats.BasicBlockStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement.EdgeDirection;
@@ -159,18 +156,20 @@ public final class DeadCodeEliminator {
    * Edges from other dead code (after the cut index) do not block removal.
    */
   private static boolean hasIncomingEdgesFromLiveCode(Statement stat, Statement seq, int cutIndex) {
-    // Check predecessor edges
+    // Check predecessor edges.
     Set<Statement> preds = stat.getNeighboursSet(Statement.STATEDGE_DIRECT_ALL, EdgeDirection.BACKWARD);
     for (Statement pred : preds) {
       if (!seq.containsStatementStrict(pred)) {
         return true; // from outside the sequence
       }
       if (isInLivePart(pred, seq, cutIndex)) {
-        return true; // from live code before the unconditional exit
+        return true; // from live code
       }
     }
 
-    // Check label edges (this statement is the closure/target)
+    // Check label edges (this statement is the closure/target).
+    // These represent genuine closure relationships — removing the target
+    // would invalidate the break/continue label reference.
     for (StatEdge labelEdge : stat.getLabelEdges()) {
       Statement source = labelEdge.getSource();
       if (!seq.containsStatementStrict(source)) {

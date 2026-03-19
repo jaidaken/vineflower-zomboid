@@ -6,6 +6,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.DecHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
 import org.jetbrains.java.decompiler.util.TextBuffer;
+import org.jetbrains.java.decompiler.util.collections.VBStyleCollection;
 
 import java.util.Arrays;
 import java.util.List;
@@ -114,6 +115,14 @@ public class SequenceStatement extends Statement {
       buf.append(str);
 
       notempty = !str.containsOnlyWhitespaces();
+
+      // RTF: if this child always exits via a non-regular path (continue/break/
+      // return/throw), subsequent children are bytecode-level dead code that
+      // javac would reject as "unreachable statement". Stop rendering.
+      if (DecompilerContext.isRoundtripFidelity() && i < stats.size() - 1
+          && endsWithNonRegularExit(st)) {
+        break;
+      }
     }
 
     if (islabeled) {
@@ -121,6 +130,45 @@ public class SequenceStatement extends Statement {
     }
 
     return buf;
+  }
+
+  /**
+   * Check if a statement's execution always ends with a non-regular exit
+   * (continue/break/return/throw). This is determined by checking the
+   * statement's jmpWrapper condition: exactly 1 direct successor edge that
+   * is not TYPE_REGULAR and is explicit.
+   *
+   * For SequenceStatements, this recursively checks the last child, since
+   * the sequence's execution ends with its last child's exit.
+   */
+  private static boolean endsWithNonRegularExit(Statement stat) {
+    // Check the statement's own direct successor edges (same condition as jmpWrapper)
+    List<StatEdge> succs = stat.getSuccessorEdges(STATEDGE_DIRECT_ALL);
+    if (succs.size() == 1) {
+      StatEdge edge = succs.get(0);
+      if (edge.getType() != StatEdge.TYPE_REGULAR && edge.explicit) {
+        return true;
+      }
+    }
+
+    // For sequence statements, check the last child recursively
+    if (stat instanceof SequenceStatement) {
+      VBStyleCollection<Statement, Integer> children = stat.getStats();
+      if (!children.isEmpty()) {
+        return endsWithNonRegularExit(children.getLast());
+      }
+    }
+
+    // Check if the statement has exprents ending with a return/throw
+    // (ExitExprent with EXIT_RETURN or EXIT_THROW)
+    if (stat.getExprents() != null && !stat.getExprents().isEmpty()) {
+      Object lastExpr = stat.getExprents().get(stat.getExprents().size() - 1);
+      if (lastExpr instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   @Override
