@@ -273,7 +273,7 @@ public class FlattenStatementsHelper {
             this.addDestination(stat, conditionNode); // for a while, the start is the condition
             this.addDestination(stat, conditionNode, Edge.Type.CONTINUE); // for a while, continues go to the condition
 
-            this.addEdge(conditionNode, stat.getFirstSuccessor());
+            this.addLoopExitEdge(conditionNode, stat);
             return conditionNode;
           }
           case DO_WHILE: {
@@ -286,7 +286,7 @@ public class FlattenStatementsHelper {
 
             this.handleLoopEnd(stat, body);
 
-            this.addEdge(conditionNode, stat.getFirstSuccessor());
+            this.addLoopExitEdge(conditionNode, stat);
             return body;
           }
           case FOR: {
@@ -307,7 +307,7 @@ public class FlattenStatementsHelper {
 
             this.handleLoopEnd(stat, body);
 
-            this.addEdge(conditionNode, stat.getFirstSuccessor());
+            this.addLoopExitEdge(conditionNode, stat);
             return initNode;
           }
           case FOR_EACH: {
@@ -331,7 +331,7 @@ public class FlattenStatementsHelper {
 
             this.handleLoopEnd(stat, body);
 
-            this.addEdge(init, stat.getFirstSuccessor());
+            this.addLoopExitEdge(init, stat);
             return inc;
           }
           default: {
@@ -549,6 +549,21 @@ public class FlattenStatementsHelper {
 
     if (lastBasic != null) {
       this.indirectEdges.add(new Edge(lastBasic, stat, Edge.Type.REGULAR));
+    }
+  }
+
+  /**
+   * Adds the loop-exit edge from a condition node to the loop's successor.
+   * When the loop has no successor (e.g. RTF mode blocks edge creation for
+   * infinite-style loops), falls through to the method's dummy exit instead
+   * of crashing with "No successor exists for {Do}".
+   */
+  private void addLoopExitEdge(DirectNode conditionNode, Statement loopStat) {
+    if (loopStat.hasSuccessor(Statement.STATEDGE_ALL)) {
+      this.addEdge(conditionNode, loopStat.getFirstSuccessor());
+    } else {
+      // No successor — loop never exits normally. Connect to dummy exit.
+      this.saveEdge(conditionNode, this.root.getDummyExit(), StatEdge.TYPE_REGULAR);
     }
   }
 
