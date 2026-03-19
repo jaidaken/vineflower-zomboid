@@ -500,6 +500,19 @@ public class ClassesProcessor implements CodeConstants {
         writer.writeClass(root, classBuffer, 0);
         classBuffer.reformat();
 
+        // RTF: rename $assertionsDisabled to _assertionsDisabled.
+        // In RTF mode, AssertProcessor is skipped so the synthetic field
+        // stays visible. The $ prefix is a compiler convention not valid
+        // in hand-written source, so rename it everywhere in the output.
+        if (DecompilerContext.isRoundtripFidelity()) {
+          String text = classBuffer.convertToStringAndAllowDataDiscard();
+          if (text.contains("$assertionsDisabled")) {
+            text = text.replace("$assertionsDisabled", "_assertionsDisabled");
+            classBuffer.setLength(0);
+            classBuffer.append(text);
+          }
+        }
+
         classBuffer.getTracers().forEach((classAndMethod, tracer) -> {
           // get the class by name
           StructClass clazz = DecompilerContext.getStructContext().getClass(classAndMethod.a);
