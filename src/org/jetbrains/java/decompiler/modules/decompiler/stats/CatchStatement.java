@@ -178,32 +178,6 @@ public class CatchStatement extends Statement {
       buf.append(" catch (");
 
       List<String> exception_types = exctstrings.get(i - 1);
-      // RTF: widen checked exceptions that the try body cannot throw.
-      // The bytecode exception table may list specific exceptions (e.g.,
-      // CloneNotSupportedException) even though the source used a broader
-      // catch (Exception). Javac rejects catch clauses for checked exceptions
-      // not thrown by the try body.
-      if (DecompilerContext.isRoundtripFidelity() && exception_types.size() == 1) {
-        String excType = exception_types.get(0);
-        if ("java/lang/CloneNotSupportedException".equals(excType)
-            || "java/lang/InterruptedException".equals(excType)
-            || "java/lang/ReflectiveOperationException".equals(excType)) {
-          // Check if another catch clause already handles Exception
-          boolean hasExceptionCatch = false;
-          for (int j = 0; j < exctstrings.size(); j++) {
-            if (j != i - 1 && exctstrings.get(j).contains("java/lang/Exception")) {
-              hasExceptionCatch = true;
-              break;
-            }
-          }
-          if (!hasExceptionCatch) {
-            exception_types = new java.util.ArrayList<>(exception_types);
-            exception_types.set(0, "java/lang/Exception");
-            VarExprent catchVar = vars.get(i - 1);
-            catchVar.setVarType(new VarType(CodeType.OBJECT, 0, "java/lang/Exception"));
-          }
-        }
-      }
       if (exception_types.size() > 1) { // multi-catch, Java 7 style
         for (int exc_index = 1; exc_index < exception_types.size(); ++exc_index) {
           VarType exc_type = new VarType(CodeType.OBJECT, 0, exception_types.get(exc_index));
