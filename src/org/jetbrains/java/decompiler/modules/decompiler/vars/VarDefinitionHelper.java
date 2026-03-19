@@ -189,6 +189,15 @@ public class VarDefinitionHelper {
             VarExprent var = (VarExprent)dstat.getInitExprent();
             if (var.getIndex() == index) {
               var.setDefinition(true);
+              // RTF: for-each variables typed as Object should use 'var'
+              // so javac infers the element type from the iterable.
+              // Safe because for-each variables are never reassigned.
+              if (DecompilerContext.isRoundtripFidelity()) {
+                VarType vt = var.getVarType();
+                if (vt != null && "java/lang/Object".equals(vt.value) && vt.arrayDim == 0) {
+                  var.setUseVar(true);
+                }
+              }
               continue;
             }
           }

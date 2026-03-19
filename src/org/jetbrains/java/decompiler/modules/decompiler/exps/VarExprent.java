@@ -58,6 +58,7 @@ public class VarExprent extends Exprent implements Pattern {
   private Instruction backing = null;
   private boolean isEffectivelyFinal = false;
   private boolean defaultInit = false;
+  private boolean useVar = false;
   private boolean writingPattern = false;
   private VarType boundType;
   private boolean isIntersectionType = false;
@@ -115,6 +116,7 @@ public class VarExprent extends Exprent implements Pattern {
     var.setLVT(lvt);
     var.setEffectivelyFinal(isEffectivelyFinal);
     var.setDefaultInit(defaultInit);
+    var.setUseVar(useVar);
     return var;
   }
 
@@ -145,7 +147,7 @@ public class VarExprent extends Exprent implements Pattern {
           DecompilerContext.getImportCollector().ensureImported(fullName);
         }
         String name = ExprProcessor.getCastTypeName(definitionType);
-        if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType) {
+        if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType || useVar) {
           buffer.append("var");
         } else {
           buffer.appendCastTypeName(definitionType);
@@ -403,6 +405,14 @@ public class VarExprent extends Exprent implements Pattern {
 
   public void setDefaultInit(boolean defaultInit) {
     this.defaultInit = defaultInit;
+  }
+
+  public boolean isUseVar() {
+    return useVar;
+  }
+
+  public void setUseVar(boolean useVar) {
+    this.useVar = useVar;
   }
 
   public VarProcessor getProcessor() {
