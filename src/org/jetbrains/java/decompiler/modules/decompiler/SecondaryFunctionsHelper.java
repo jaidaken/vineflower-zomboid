@@ -52,7 +52,8 @@ public final class SecondaryFunctionsHelper {
   public static boolean identifySecondaryFunctions(Statement stat, VarProcessor varProc, IdentifySecondaryOptions options) {
     if (stat.getExprents() == null) {
       // if(){;}else{...} -> if(!){...}
-      if (stat instanceof IfStatement) {
+      // RTF: skip — negating the condition flips bytecode branch direction
+      if (stat instanceof IfStatement && !DecompilerContext.isRoundtripFidelity()) {
         IfStatement ifelsestat = (IfStatement) stat;
         Statement ifstat = ifelsestat.getIfstat();
 
