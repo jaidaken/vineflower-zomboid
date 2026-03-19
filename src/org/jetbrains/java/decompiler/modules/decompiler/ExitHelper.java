@@ -45,7 +45,7 @@ public final class ExitHelper {
           Statement last = st.getStats().getLast();
           Statement secondlast = st.getStats().get(st.getStats().size() - 2);
 
-          if (!secondlast.hasBasicSuccEdge()) {
+          if (!hasEffectiveBasicSuccEdge(secondlast)) {
             Set<Statement> set = last.getNeighboursSet(Statement.STATEDGE_DIRECT_ALL, EdgeDirection.BACKWARD);
             set.remove(secondlast);
 
@@ -192,6 +192,55 @@ public final class ExitHelper {
     }
 
     return ret;
+  }
+
+  /**
+   * Check if a statement effectively has a basic successor edge.
+   * For most statements, this delegates to hasBasicSuccEdge().
+   * For SequenceStatements, we additionally check the last child:
+   * a sequence ending with an IfStatement (if-then, no else) or a
+   * non-infinite DoStatement DOES have a fall-through path, even though
+   * SequenceStatement.hasBasicSuccEdge() returns false by default.
+   * This prevents cleanUpUnreachableBlocks from incorrectly removing
+   * loop increments that follow wrapper sequences created by integrateExits.
+   */
+  private static boolean hasEffectiveBasicSuccEdge(Statement stat) {
+    if (stat.hasBasicSuccEdge()) {
+      return true;
+    }
+    // SequenceStatement: delegate to last child (a sequence ending with a
+    // non-infinite loop or if-then effectively has a fall-through path)
+    if (stat instanceof SequenceStatement && !stat.getStats().isEmpty()) {
+      return hasEffectiveBasicSuccEdge(stat.getStats().getLast());
+    }
+    // INFINITE DoStatement: check if the loop has break edges going out,
+    // meaning it will later be converted to WHILE/FOR by enhanceLoops.
+    // At this point in the pipeline, the loop is still INFINITE but
+    // structurally has an exit path.
+    if (stat instanceof DoStatement && ((DoStatement) stat).getLooptype() == DoStatement.Type.INFINITE) {
+      // An infinite loop with outgoing break edges or with a first-if that
+      // could become a while condition effectively has a successor.
+      if (!stat.getSuccessorEdges(StatEdge.TYPE_REGULAR).isEmpty()) {
+        return true;
+      }
+      // Check if the loop body starts with an if-break pattern (future while)
+      Statement first = stat.getFirst();
+      if (first instanceof IfStatement) {
+        IfStatement ifst = (IfStatement) first;
+        if (ifst.getIfstat() == null) {
+          // negated if with break → will become while condition
+          return true;
+        }
+      }
+      // Check nested: loop body might be a sequence starting with if-break
+      if (first instanceof SequenceStatement && !first.getStats().isEmpty()) {
+        Statement seqFirst = first.getStats().get(0);
+        if (seqFirst instanceof IfStatement && ((IfStatement) seqFirst).getIfstat() == null) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private static Statement isExitEdge(StatEdge edge) {
