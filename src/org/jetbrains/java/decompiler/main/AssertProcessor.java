@@ -28,14 +28,6 @@ public final class AssertProcessor {
   private static final VarType CLASS_ASSERTION_ERROR = new VarType(CodeType.OBJECT, 0, "java/lang/AssertionError");
 
   public static void buildAssertions(ClassNode node) {
-    // RTF: skip assert keyword conversion. Keep the explicit
-    // if (!$assertionsDisabled && !(condition)) throw new AssertionError()
-    // pattern so javac produces matching bytecode. The field rename
-    // ($assertionsDisabled -> _assertionsDisabled) happens in ClassesProcessor
-    // after rendering, as a text replace on the final output.
-    if (DecompilerContext.isRoundtripFidelity()) {
-      return;
-    }
 
     ClassWrapper wrapper = node.getWrapper();
 
