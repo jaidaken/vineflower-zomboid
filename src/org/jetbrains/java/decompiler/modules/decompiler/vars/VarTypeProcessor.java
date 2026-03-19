@@ -183,10 +183,12 @@ public class VarTypeProcessor {
           VarExprent varExpr = (VarExprent) exprent;
           if (varExpr.getLVT() != null) {
             VarType lvtType = varExpr.getLVT().getVarType();
-            // Only pin OBJECT types (reference types like IsoGameCharacter, String, etc.)
-            // Primitive LVT types are unreliable: JVM uses int for boolean/byte/short/char,
-            // so pinning would force int where byte/boolean is needed.
-            if (lvtType.type == CodeType.OBJECT) {
+            // Pin OBJECT types and INT from LVT. OBJECT pinning prevents wrong reference
+            // types. INT pinning prevents Vineflower from narrowing int to byte/short/char
+            // when the LVT says int (the original source used int).
+            // Don't pin byte/short/char/boolean — those LVT types mean the programmer
+            // intended the narrow type.
+            if (lvtType.type == CodeType.OBJECT || lvtType.equals(VarType.VARTYPE_INT)) {
               // Don't pin if the proposed type is incompatible with the LVT type.
               // This handles variables reassigned to different subtypes (e.g., a variable
               // declared as IsoWindow in LVT but also assigned from IsoThumpable).
