@@ -57,6 +57,7 @@ public class VarExprent extends Exprent implements Pattern {
   // Applies only to real vars, not stack vars
   private Instruction backing = null;
   private boolean isEffectivelyFinal = false;
+  private boolean defaultInit = false;
   private boolean writingPattern = false;
   private VarType boundType;
   private boolean isIntersectionType = false;
@@ -113,6 +114,7 @@ public class VarExprent extends Exprent implements Pattern {
     var.setStack(stack);
     var.setLVT(lvt);
     var.setEffectivelyFinal(isEffectivelyFinal);
+    var.setDefaultInit(defaultInit);
     return var;
   }
 
@@ -201,9 +203,36 @@ public class VarExprent extends Exprent implements Pattern {
           buffer.append(name);
         }
       }
+
+      // Append default initialization for bare variable definitions to prevent
+      // "variable might not have been initialized" compilation errors.
+      if (defaultInit && definition) {
+        buffer.append(" = ").append(getDefaultValueString(getDefinitionVarType()));
+      }
     }
 
     return buffer;
+  }
+
+  /**
+   * Returns a string representation of the default value for the given type.
+   */
+  private static String getDefaultValueString(VarType varType) {
+    if (varType.arrayDim > 0 || varType.type == CodeType.OBJECT) {
+      return "null";
+    }
+    switch (varType.type) {
+      case BOOLEAN:
+        return "false";
+      case FLOAT:
+        return "0.0F";
+      case LONG:
+        return "0L";
+      case DOUBLE:
+        return "0.0";
+      default:
+        return "0";
+    }
   }
 
   public VarVersionPair getVarVersionPair() {
@@ -366,6 +395,14 @@ public class VarExprent extends Exprent implements Pattern {
 
   public void setDefinition(boolean definition) {
     this.definition = definition;
+  }
+
+  public boolean isDefaultInit() {
+    return defaultInit;
+  }
+
+  public void setDefaultInit(boolean defaultInit) {
+    this.defaultInit = defaultInit;
   }
 
   public VarProcessor getProcessor() {

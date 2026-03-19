@@ -240,10 +240,10 @@ public class VarDefinitionHelper {
           var.setLVT(lvt);
         }
 
-        // For reference types (objects and arrays), initialize to null to prevent
-        // "variable might not have been initialized" compilation errors that arise
-        // when the decompiler's structural analysis creates control flow paths where
-        // Java's definite assignment analysis cannot prove initialization.
+        // For reference types (objects and arrays), initialize to null using an
+        // AssignmentExprent in the AST. For primitive types, use rendering-time
+        // default initialization via the defaultInit flag to avoid AST issues
+        // with downstream passes (e.g., setNonFinal casting to VarExprent).
         if (varType.type == CodeType.OBJECT || varType.arrayDim > 0) {
           AssignmentExprent assign = new AssignmentExprent(
             var,
@@ -252,6 +252,7 @@ public class VarDefinitionHelper {
           );
           lst.add(addindex, assign);
         } else {
+          var.setDefaultInit(true);
           lst.add(addindex, var);
         }
       }

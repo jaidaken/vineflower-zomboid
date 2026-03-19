@@ -850,27 +850,31 @@ public class ClassWriter implements StatementWriter {
     if (!isEnum) {
       int fieldFlags = fd.getAccessFlags();
 
-      // RTF: suppress 'final' on non-static instance fields that have no initializer
-      // and are not initialized in any constructor. This happens when decompilation
-      // loses constructor initialization code (e.g., through dead code elimination),
-      // leaving a final field without assignment, which javac rejects.
+      // RTF: suppress 'final' on fields that have no initializer and are not
+      // initialized in constructors (instance) or <clinit> (static). This happens
+      // when decompilation loses initialization code (e.g., through dead code
+      // elimination or failed <clinit> decompilation), leaving a final field
+      // without assignment, which javac rejects.
       if (DecompilerContext.isRoundtripFidelity()
-          && (fieldFlags & CodeConstants.ACC_FINAL) != 0
-          && (fieldFlags & CodeConstants.ACC_STATIC) == 0) {
-        Exprent dynInit = wrapper.getDynamicFieldInitializers()
-            .getWithKey(InterpreterUtil.makeUniqueKey(fd.getName(), fd.getDescriptor()));
+          && (fieldFlags & CodeConstants.ACC_FINAL) != 0) {
+        boolean isStatic = (fieldFlags & CodeConstants.ACC_STATIC) != 0;
+        String initKey = InterpreterUtil.makeUniqueKey(fd.getName(), fd.getDescriptor());
+        Exprent dynInit = isStatic
+            ? wrapper.getStaticFieldInitializers().getWithKey(initKey)
+            : wrapper.getDynamicFieldInitializers().getWithKey(initKey);
         if (dynInit == null) {
-          // Check if any constructor assigns this field
-          boolean assignedInConstructors = false;
+          // Check if the field is assigned in a constructor (instance) or <clinit> (static)
+          boolean assignedInInit = false;
+          String initMethodName = isStatic ? CodeConstants.CLINIT_NAME : CodeConstants.INIT_NAME;
           for (MethodWrapper mw : wrapper.getMethods()) {
-            if (CodeConstants.INIT_NAME.equals(mw.methodStruct.getName())) {
+            if (initMethodName.equals(mw.methodStruct.getName())) {
               if (mw.root != null) {
-                assignedInConstructors |= containsFieldAssignment(
+                assignedInInit |= containsFieldAssignment(
                     mw.root, cl.qualifiedName, fd.getName(), fd.getDescriptor());
               }
             }
           }
-          if (!assignedInConstructors) {
+          if (!assignedInInit) {
             fieldFlags &= ~CodeConstants.ACC_FINAL;
           }
         }
