@@ -420,13 +420,35 @@ public final class ExitHelper {
 
       case SWITCH:
         SwitchStatement swStat = (SwitchStatement) stat;
-        // All case branches must end with return
-        for (Statement caseStat : swStat.getCaseStatements()) {
+        List<Statement> caseStmts = swStat.getCaseStatements();
+        if (caseStmts.isEmpty()) return false;
+        // Check if all case branches individually end with return
+        boolean allReturn = true;
+        for (Statement caseStat : caseStmts) {
           if (!statementEndsWithReturn(caseStat)) {
-            return false;
+            allReturn = false;
+            break;
           }
         }
-        return !swStat.getCaseStatements().isEmpty();
+        if (allReturn) return true;
+        // Fall-through: if the last case ends with return and there's a default
+        // case, then all earlier non-returning cases fall through to eventually
+        // reach the last case's return. This handles unsimplified string-switch
+        // patterns where one case just sets a variable and falls through.
+        if (statementEndsWithReturn(caseStmts.get(caseStmts.size() - 1))) {
+          boolean hasDefault = false;
+          for (List<StatEdge> edges : swStat.getCaseEdges()) {
+            for (StatEdge edge : edges) {
+              if (edge == swStat.getDefaultEdge()) {
+                hasDefault = true;
+                break;
+              }
+            }
+            if (hasDefault) break;
+          }
+          if (hasDefault) return true;
+        }
+        return false;
 
       case TRY_CATCH:
       case CATCH_ALL:

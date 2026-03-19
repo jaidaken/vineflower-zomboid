@@ -169,8 +169,12 @@ public class SequenceStatement extends Statement {
     }
 
     // A SwitchStatement with an explicit default case and no outgoing successor
-    // edges: all execution paths exit via throw/return, so subsequent siblings
-    // are unreachable.
+    // edges where ALL case bodies end with a non-regular exit: all execution
+    // paths exit via throw/return, so subsequent siblings are unreachable.
+    // We must verify every case body actually exits — a case containing a nested
+    // switch with fall-through paths (e.g., unsimplified string-switch hashCode
+    // patterns) may not exit on all paths even though the switch has no successor
+    // edges in the edge graph.
     if (succs.isEmpty() && stat instanceof SwitchStatement) {
       SwitchStatement sw = (SwitchStatement) stat;
       boolean hasExplicitDefault = false;
@@ -184,7 +188,15 @@ public class SequenceStatement extends Statement {
         if (hasExplicitDefault) break;
       }
       if (hasExplicitDefault) {
-        return true;
+        // Verify the last case body ends with a non-regular exit.
+        // Cases that don't exit on their own fall through to subsequent cases.
+        // If the last case exits, all fall-through chains eventually reach an exit.
+        // If the last case doesn't exit, some paths fall off the switch.
+        List<Statement> caseStats = sw.getCaseStatements();
+        if (!caseStats.isEmpty()
+            && endsWithNonRegularExit(caseStats.get(caseStats.size() - 1))) {
+          return true;
+        }
       }
     }
 
