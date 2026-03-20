@@ -980,20 +980,10 @@ public class InvocationExprent extends Exprent {
       }
     }
 
-    // RTF: when the method descriptor returns Object but VF's inferred type is
-    // a primitive (int, boolean), insert a cast. Skip statement-level expressions
-    // (where the return value is discarded) to avoid "not a statement" errors.
-    if (DecompilerContext.isRoundtripFidelity() && !rtfStatementLevel
-        && !isUnboxingCall() && !isBoxingCall()
-        && invocationType != InvocationType.DYNAMIC
-        && stringDescriptor != null && stringDescriptor.endsWith(")Ljava/lang/Object;")) {
-      VarType inferred = getInferredExprType(null);
-      if (inferred != null && inferred.type != CodeType.OBJECT && inferred.type != CodeType.NULL
-          && inferred.type != CodeType.UNKNOWN && inferred.type != CodeType.VOID
-          && inferred.type != CodeType.GENVAR) {
-        buf = buf.enclose("(" + ExprProcessor.getCastTypeName(inferred) + ")", "");
-      }
-    }
+    // Note: general Object→specific casts cannot be applied here because
+    // getInferredExprType returns VF's internal view which may disagree with
+    // what javac infers from the source. Individual patterns (unboxing, toArray,
+    // field access) are handled at their specific rendering sites.
 
     return buf;
   }
