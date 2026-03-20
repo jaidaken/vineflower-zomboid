@@ -240,6 +240,12 @@ public class VarTypeProcessor {
         newMinType = VarType.getCommonSupertype(currentMinType, newType);
       }
 
+      // RTF: strip generic types with Object args — they indicate unresolved type
+      // variables (T1->Object) and cause javac inference constraint errors.
+      if (DecompilerContext.isRoundtripFidelity() && newMinType != null && VarType.hasObjectOrGenvarArgs(newMinType)) {
+        newMinType = new VarType(newMinType.type, newMinType.arrayDim, newMinType.value);
+      }
+
       mapExprentMinTypes.put(pair, newMinType);
       if (exprent instanceof ConstExprent) {
         ((ConstExprent) exprent).setConstType(newMinType);

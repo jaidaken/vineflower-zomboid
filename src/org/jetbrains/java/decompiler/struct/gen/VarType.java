@@ -337,16 +337,20 @@ public class VarType {
     if (type1.isSuperset(type2)) {
       // RTF: when both types are equal but one has generic args, prefer the generic one.
       // This preserves Stream<Path> over raw Stream in the common supertype.
+      // BUT: don't preserve if any generic arg is Object (unresolved type variable)
+      // or GENVAR — this prevents CallbackStackItem<Object> from leaking into
+      // generic class internals.
       if (type2.isGeneric() && !type1.isGeneric() && type1.equals(type2)
-          && DecompilerContext.isRoundtripFidelity()) {
+          && DecompilerContext.isRoundtripFidelity()
+          && !hasObjectOrGenvarArgs(type2)) {
         return type2;
       }
       return type1;
     }
     else if (type2.isSuperset(type1)) {
-      // Same guard for the reverse direction
       if (type1.isGeneric() && !type2.isGeneric() && type2.equals(type1)
-          && DecompilerContext.isRoundtripFidelity()) {
+          && DecompilerContext.isRoundtripFidelity()
+          && !hasObjectOrGenvarArgs(type1)) {
         return type1;
       }
       return type2;
@@ -367,6 +371,18 @@ public class VarType {
     }
 
     return null;
+  }
+
+  public static boolean hasObjectOrGenvarArgs(VarType type) {
+    if (type instanceof org.jetbrains.java.decompiler.struct.gen.generics.GenericType) {
+      for (VarType arg : ((org.jetbrains.java.decompiler.struct.gen.generics.GenericType) type).getArguments()) {
+        // Object args indicate unresolved type variables — filter these
+        if (arg.type == CodeType.OBJECT && "java/lang/Object".equals(arg.value)) return true;
+        // DON'T filter GENVAR args — they're valid type parameters (K, V, T)
+        // inside generic class bodies. Only Object args are problematic.
+      }
+    }
+    return false;
   }
 
   public static VarType getMinTypeInFamily(TypeFamily family) {
