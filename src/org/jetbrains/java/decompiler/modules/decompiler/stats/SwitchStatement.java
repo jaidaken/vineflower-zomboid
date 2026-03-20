@@ -4,6 +4,7 @@ package org.jetbrains.java.decompiler.modules.decompiler.stats;
 import org.jetbrains.java.decompiler.code.SwitchInstruction;
 import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
+import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.main.collectors.CounterContainer;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
 import org.jetbrains.java.decompiler.modules.decompiler.DecHelper;
@@ -12,6 +13,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
 import org.jetbrains.java.decompiler.modules.decompiler.ValidationHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.StartEndPair;
 import org.jetbrains.java.decompiler.util.TextBuffer;
@@ -527,6 +529,20 @@ public class SwitchStatement extends Statement {
 
   public List<Exprent> getCaseGuards() {
     return caseGuards;
+  }
+
+  private boolean hasOnlyIntConstCases() {
+    for (List<Exprent> values : caseValues) {
+      for (Exprent value : values) {
+        if (value == null) continue; // default case
+        if (!(value instanceof ConstExprent)) return false;
+        ConstExprent constVal = (ConstExprent) value;
+        if (constVal.getConstType().typeFamily != TypeFamily.INTEGER && constVal.getConstType() != VarType.VARTYPE_NULL) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   public void scopeCaseStatement(Statement stat) {

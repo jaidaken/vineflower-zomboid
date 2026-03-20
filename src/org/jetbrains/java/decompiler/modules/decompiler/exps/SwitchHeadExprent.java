@@ -6,6 +6,8 @@ package org.jetbrains.java.decompiler.modules.decompiler.exps;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.CheckTypesResult;
+import org.jetbrains.java.decompiler.struct.gen.CodeType;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.InterpreterUtil;
 import org.jetbrains.java.decompiler.util.TextBuffer;
@@ -92,9 +94,43 @@ public class SwitchHeadExprent extends Exprent {
 
   @Override
   public TextBuffer toJava(int indent) {
-    TextBuffer buf = value.toJava(indent).enclose("switch (", ")");
+    TextBuffer valBuf = value.toJava(indent);
+    // RTF: when the switch selector would be Object at compile time (from erased
+    // generics on raw collections) but the switch uses LOOKUPSWITCH/TABLESWITCH
+    // (which operates on int), insert an (int) cast.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      boolean needsCast = false;
+      // Check if the value expression would compile to Object at Java source level
+      if (value instanceof InvocationExprent) {
+        String desc = ((InvocationExprent) value).getStringDescriptor();
+        if (desc != null && desc.endsWith(")Ljava/lang/Object;")) {
+          needsCast = true;
+        }
+      } else if (value instanceof VarExprent) {
+        VarType vt = value.getExprType();
+        if (vt.type == CodeType.OBJECT && "java/lang/Object".equals(vt.value)) {
+          needsCast = true;
+        }
+      }
+      if (needsCast) {
+        valBuf = valBuf.enclose("(int)", "");
+      }
+    }
+    TextBuffer buf = valBuf.enclose("switch (", ")");
     buf.addStartBytecodeMapping(bytecode);
     return buf;
+  }
+
+  private boolean hasOnlyIntConstCaseValues() {
+    for (List<Exprent> values : caseValues) {
+      for (Exprent val : values) {
+        if (val == null) continue;
+        if (!(val instanceof ConstExprent)) return false;
+        VarType ct = ((ConstExprent) val).getConstType();
+        if (ct.typeFamily != TypeFamily.INTEGER && ct != VarType.VARTYPE_NULL) return false;
+      }
+    }
+    return true;
   }
 
   @Override
