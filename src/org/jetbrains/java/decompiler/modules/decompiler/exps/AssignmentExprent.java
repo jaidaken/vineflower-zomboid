@@ -279,9 +279,21 @@ public class AssignmentExprent extends Exprent {
                 if (eqIdx >= 0) {
                   String afterEq = rendered.substring(eqIdx + 2).trim();
                   if (!afterEq.startsWith("(")) {
-                    // Re-render with explicit cast
+                    // Re-render with explicit cast.
+                    // For primitives (int, long), cast to the BOXED type (Integer, Long)
+                    // because (int)Object is invalid but (Integer)Object auto-unboxes.
+                    VarType castType = leftType;
+                    if (leftType.type != CodeType.OBJECT && leftType.type != CodeType.NULL) {
+                      // Primitive LHS — find the boxed equivalent
+                      for (java.util.Map.Entry<VarType, VarType> e : VarType.UNBOXING_TYPES.entrySet()) {
+                        if (e.getValue().equals(leftType)) {
+                          castType = e.getKey();
+                          break;
+                        }
+                      }
+                    }
                     buffer.setLength(eqIdx + 2);
-                    buffer.append("(").appendCastTypeName(leftType).append(")");
+                    buffer.append("(").appendCastTypeName(castType).append(")");
                     buffer.append(right.toJava(indent));
                   }
                 }
