@@ -7,6 +7,7 @@ import java.util.Map;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.util.InterpreterUtil;
 
 public class VarType {
@@ -334,9 +335,20 @@ public class VarType {
   // Result should be the union of both types
   public static @Nullable VarType getCommonSupertype(VarType type1, VarType type2) {
     if (type1.isSuperset(type2)) {
+      // RTF: when both types are equal but one has generic args, prefer the generic one.
+      // This preserves Stream<Path> over raw Stream in the common supertype.
+      if (type2.isGeneric() && !type1.isGeneric() && type1.equals(type2)
+          && DecompilerContext.isRoundtripFidelity()) {
+        return type2;
+      }
       return type1;
     }
     else if (type2.isSuperset(type1)) {
+      // Same guard for the reverse direction
+      if (type1.isGeneric() && !type2.isGeneric() && type2.equals(type1)
+          && DecompilerContext.isRoundtripFidelity()) {
+        return type1;
+      }
       return type2;
     }
     else if (type1.typeFamily == type2.typeFamily) {

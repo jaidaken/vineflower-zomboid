@@ -66,7 +66,11 @@ public class AssignmentExprent extends Exprent {
     CheckTypesResult result = new CheckTypesResult();
 
     VarType typeLeft = left.getExprType();
-    VarType typeRight = right.getExprType();
+    // RTF: use getInferredExprType for RHS to capture generic return types
+    // from method signatures (e.g., Files.walk() -> Stream<Path>).
+    VarType typeRight = DecompilerContext.isRoundtripFidelity()
+        ? right.getInferredExprType(null) : right.getExprType();
+    if (typeRight == null) typeRight = right.getExprType();
 
     if (typeLeft.typeFamily.isGreater(typeRight.typeFamily)) {
       result.addMinTypeExprent(right, VarType.getMinTypeInFamily(typeLeft.typeFamily));

@@ -321,6 +321,30 @@ public class VarExprent extends Exprent implements Pattern {
       }
     }
 
+    // RTF: when no LVT/LVTT is available, try to use the inferred generic type
+    // for the variable declaration. This produces Stream<Path> instead of raw Stream.
+    // Guard: only do this when NOT inside the class that declares the type variable,
+    // to avoid over-resolving T to IsoGridSquare inside FibonacciHeap<T>.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      VarType inferred = getInferredExprType(null);
+      if (inferred != null && inferred.isGeneric() && inferred.type != CodeType.GENVAR) {
+        // Check if any generic argument is a GENVAR (type variable like T, E, V).
+        // If so, we're likely inside a generic class and shouldn't use this type.
+        boolean hasGenVar = false;
+        if (inferred instanceof GenericType) {
+          for (VarType arg : ((GenericType) inferred).getArguments()) {
+            if (arg.type == CodeType.GENVAR) {
+              hasGenVar = true;
+              break;
+            }
+          }
+        }
+        if (!hasGenVar) {
+          return inferred;
+        }
+      }
+    }
+
     return getVarType();
   }
 
