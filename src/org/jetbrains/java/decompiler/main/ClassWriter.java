@@ -258,23 +258,22 @@ public class ClassWriter implements StatementWriter {
                 // Emit explicit type annotation so javac accepts member access on the parameter.
                 boolean emitExplicitType = false;
                 VarType inferredType = type;
+                // RTF: check the FUNCTIONAL INTERFACE parameter type (md_lambda),
+                // not the content method parameter type (md_content).
+                // When the collection is raw, md_lambda has Object params but
+                // md_content has the specific types from the lambda body.
+                int lambdaParamIndex = i - start_index;
+                VarType lambdaType = lambdaParamIndex >= 0 && lambdaParamIndex < md_lambda.params.length
+                    ? md_lambda.params[lambdaParamIndex] : null;
+                // RTF: always emit explicit lambda parameter types.
+                // When a lambda is passed to a raw collection's method (e.g., rawList.sort()),
+                // javac infers Object for the params from the erased functional interface.
+                // Explicit types force javac to use the correct types.
                 if (DecompilerContext.isRoundtripFidelity()
-                    && type.type == CodeType.OBJECT && "java/lang/Object".equals(type.value)) {
-                  VarVersionPair vvp = new VarVersionPair(index, 0);
-                  VarType narrowed = methodWrapper.varproc.getVarType(vvp);
-                  if (narrowed != null && narrowed.type == CodeType.OBJECT
-                      && !"java/lang/Object".equals(narrowed.value)) {
-                    inferredType = narrowed;
-                    emitExplicitType = true;
-                  }
-                  // If still Object, try to infer from field/method access in lambda body
-                  if (!emitExplicitType && methodWrapper.root != null) {
-                    VarType usageType = inferTypeFromUsage(methodWrapper.root, index);
-                    if (usageType != null) {
-                      inferredType = usageType;
-                      emitExplicitType = true;
-                    }
-                  }
+                    && type.type == CodeType.OBJECT && type.value != null
+                    && !"java/lang/Object".equals(type.value)) {
+                  inferredType = type;
+                  emitExplicitType = true;
                 }
 
                 String clashingName = methodWrapper.varproc.getClashingName(new VarVersionPair(index, 0));

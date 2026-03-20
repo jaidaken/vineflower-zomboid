@@ -199,6 +199,26 @@ public class FieldExprent extends Exprent {
         TextBuffer buff = new TextBuffer();
         boolean casted = ExprProcessor.getCastedExprent(instance, new VarType(CodeType.OBJECT, 0, classname), buff, indent, true);
 
+        // RTF: force cast when the instance's Java source type is Object
+        // (from raw method return) but the field's declaring class is specific.
+        // getCastedExprent may not cast because VF narrowed the instance type internally.
+        if (!casted && DecompilerContext.isRoundtripFidelity()) {
+          // Unwrap casts to find the underlying InvocationExprent
+          Exprent unwrapped = instance;
+          while (unwrapped instanceof FunctionExprent
+              && ((FunctionExprent) unwrapped).getFuncType() == FunctionExprent.FunctionType.CAST) {
+            unwrapped = ((FunctionExprent) unwrapped).getLstOperands().get(0);
+          }
+          String desc = unwrapped instanceof InvocationExprent
+              ? ((InvocationExprent) unwrapped).getStringDescriptor() : null;
+          if (desc != null && desc.endsWith(")Ljava/lang/Object;")
+              && classname != null && !"java/lang/Object".equals(classname)) {
+            buff = instance.toJava(indent);
+            buff.enclose("((" + ExprProcessor.getCastTypeName(new VarType(CodeType.OBJECT, 0, classname)) + ")", ")");
+            casted = true;
+          }
+        }
+
         if (casted || instance.getPrecedence() > getPrecedence()) {
           buff.encloseWithParens();
         }
