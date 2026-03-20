@@ -241,6 +241,42 @@ public class AssignmentExprent extends Exprent {
         } else {
           // Cast with the left type
           ExprProcessor.getCastedExprent(right, leftType, buffer, indent, ExprProcessor.NullCastType.DONT_CAST_AT_ALL, false, false, false);
+
+          // RTF: getCastedExprent uses getInferredExprType which may return a
+          // specific type (Counter, int) even though the Java source shows Object
+          // (from raw collection method). When the RHS is an InvocationExprent
+          // whose DESCRIPTOR returns Object but the LHS is specific, the assignment
+          // will fail at compile time. Detect this and re-render with explicit cast.
+          if (DecompilerContext.isRoundtripFidelity()) {
+            Exprent rawRight = right;
+            // Unwrap function casts to find the underlying invocation
+            while (rawRight instanceof FunctionExprent
+                && ((FunctionExprent)rawRight).getFuncType() == FunctionExprent.FunctionType.CAST) {
+              rawRight = ((FunctionExprent)rawRight).getLstOperands().get(0);
+            }
+            if (rawRight instanceof InvocationExprent) {
+              InvocationExprent rightInv = (InvocationExprent) rawRight;
+              String desc = rightInv.getStringDescriptor();
+              if (desc != null && desc.endsWith(")Ljava/lang/Object;")
+                  && leftType != null && !"java/lang/Object".equals(leftType.value)
+                  && leftType.type != CodeType.NULL && leftType.type != CodeType.UNKNOWN
+                  && leftType.type != CodeType.GENVAR
+                  && !rightInv.isUnboxingCall() && !rightInv.isBoxingCall()) {
+                // Check if the buffer already has a cast after the "= "
+                String rendered = buffer.toString();
+                int eqIdx = rendered.lastIndexOf("= ");
+                if (eqIdx >= 0) {
+                  String afterEq = rendered.substring(eqIdx + 2).trim();
+                  if (!afterEq.startsWith("(")) {
+                    // Re-render with explicit cast
+                    buffer.setLength(eqIdx + 2);
+                    buffer.append("(").appendCastTypeName(leftType).append(")");
+                    buffer.append(right.toJava(indent));
+                  }
+                }
+              }
+            }
+          }
         }
       }
     } else {
