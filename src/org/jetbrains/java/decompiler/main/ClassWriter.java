@@ -272,9 +272,8 @@ public class ClassWriter implements StatementWriter {
                 // When a lambda is passed to a raw collection's method (e.g., rawList.sort()),
                 // javac infers Object for the params from the erased functional interface.
                 // Explicit types force javac to use the correct types.
-                if (DecompilerContext.isRoundtripFidelity()
-                    && type.type == CodeType.OBJECT && type.value != null
-                    && !"java/lang/Object".equals(type.value)) {
+                // Must type ALL params (Java doesn't allow mixing typed/untyped).
+                if (DecompilerContext.isRoundtripFidelity()) {
                   inferredType = type;
                   emitExplicitType = true;
                 }
