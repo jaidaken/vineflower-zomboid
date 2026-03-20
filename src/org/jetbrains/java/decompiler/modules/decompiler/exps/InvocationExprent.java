@@ -355,6 +355,19 @@ public class InvocationExprent extends Exprent {
             cls = DecompilerContext.getStructContext().getClass(instType.value);
             if (cls != null && cls.getSignature() != null) {
               cls.getSignature().genericType.mapGenVarsTo(ginstance, tempMap);
+
+              // RTF: when inside the class that declares the type variables,
+              // only keep mappings where the target is a GENVAR (type variable).
+              // Suppress mappings to concrete types (e.g., T→IsoGridSquare)
+              // which leak from call-site context.
+              if (DecompilerContext.isRoundtripFidelity()) {
+                ClassNode currentCls = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+                if (currentCls != null && cls.qualifiedName.equals(currentCls.classStruct.qualifiedName)) {
+                  tempMap.entrySet().removeIf(entry ->
+                      entry.getValue().type != CodeType.GENVAR);
+                }
+              }
+
               tempMap.forEach((from, to) -> {
                 if (!fparams.contains(from.value)) {
                   processGenericMapping(from, to, named, bounds);

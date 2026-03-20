@@ -340,6 +340,32 @@ public class VarExprent extends Exprent implements Pattern {
               break;
             }
           }
+          // Also check: if the current class/method has type parameters,
+          // and the inferred generic args are concrete classes that could be
+          // substitutions of those type parameters, skip the inferred type.
+          // This prevents Entry<IsoGridSquare> inside FibonacciHeap<T>.
+          if (!hasBadArg) {
+            ClassNode currCls = (ClassNode) DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+            if (currCls != null && currCls.classStruct.getSignature() != null
+                && !currCls.classStruct.getSignature().fparameters.isEmpty()) {
+              // Current class has type parameters — check if inferred args
+              // are concrete substitutions (non-GENVAR, non-Object)
+              int numClassTypeParams = currCls.classStruct.getSignature().fparameters.size();
+              java.util.List<VarType> args = ((GenericType) inferred).getArguments();
+              if (!args.isEmpty() && args.size() <= numClassTypeParams) {
+                boolean allConcrete = true;
+                for (VarType arg : args) {
+                  if (arg.type == CodeType.GENVAR || "java/lang/Object".equals(arg.value)) {
+                    allConcrete = false;
+                    break;
+                  }
+                }
+                if (allConcrete) {
+                  hasBadArg = true; // Likely over-resolved from call site
+                }
+              }
+            }
+          }
         }
         if (!hasBadArg) {
           return inferred;

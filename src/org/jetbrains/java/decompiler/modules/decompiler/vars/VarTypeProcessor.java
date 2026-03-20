@@ -2,6 +2,7 @@
 package org.jetbrains.java.decompiler.modules.decompiler.vars;
 
 import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.ValidationHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
@@ -240,10 +241,30 @@ public class VarTypeProcessor {
         newMinType = VarType.getCommonSupertype(currentMinType, newType);
       }
 
-      // RTF: strip generic types with Object args — they indicate unresolved type
-      // variables (T1->Object) and cause javac inference constraint errors.
-      if (DecompilerContext.isRoundtripFidelity() && newMinType != null && VarType.hasObjectOrGenvarArgs(newMinType)) {
-        newMinType = new VarType(newMinType.type, newMinType.arrayDim, newMinType.value);
+      // RTF: strip generic types that would cause compilation errors.
+      if (DecompilerContext.isRoundtripFidelity() && newMinType != null) {
+        boolean shouldStrip = VarType.hasObjectOrGenvarArgs(newMinType);
+        // Also strip when inside a generic class and the type has concrete args
+        // that are likely call-site substitutions for type variables.
+        if (!shouldStrip && newMinType.isGeneric()
+            && newMinType instanceof org.jetbrains.java.decompiler.struct.gen.generics.GenericType) {
+          ClassNode currCls = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+          if (currCls != null && currCls.classStruct.getSignature() != null
+              && !currCls.classStruct.getSignature().fparameters.isEmpty()) {
+            for (VarType arg : ((org.jetbrains.java.decompiler.struct.gen.generics.GenericType) newMinType).getArguments()) {
+              if (arg.type == CodeType.OBJECT && arg.value != null
+                  && !"java/lang/Object".equals(arg.value)
+                  && arg.type != CodeType.GENVAR) {
+                // Concrete class arg inside a generic class — likely over-resolved
+                shouldStrip = true;
+                break;
+              }
+            }
+          }
+        }
+        if (shouldStrip) {
+          newMinType = new VarType(newMinType.type, newMinType.arrayDim, newMinType.value);
+        }
       }
 
       mapExprentMinTypes.put(pair, newMinType);
