@@ -84,6 +84,48 @@ public class ExitExprent extends Exprent {
         buf.append(' ');
 
         ExprProcessor.getCastedExprent(value, ret, buf, indent, ExprProcessor.NullCastType.DONT_CAST_AT_ALL, false, false, false);
+
+        // RTF: same as assignment-level cast — when the return expression
+        // is an InvocationExprent returning a wider type than the method's
+        // return type, getCastedExprent may not add a cast. Check descriptor.
+        if (DecompilerContext.isRoundtripFidelity() && value instanceof InvocationExprent) {
+          InvocationExprent valInv = (InvocationExprent) value;
+          String desc = valInv.getStringDescriptor();
+          VarType descRet = valInv.getDescriptor().ret;
+          if (desc != null && descRet != null && !descRet.equals(ret)
+              && ret.type != CodeType.NULL && ret.type != CodeType.UNKNOWN
+              && !valInv.isUnboxingCall() && !valInv.isBoxingCall()) {
+            boolean needsCast = descRet.equals(VarType.VARTYPE_OBJECT)
+                || (descRet.type == CodeType.OBJECT && ret.type == CodeType.OBJECT
+                    && !"java/lang/Object".equals(ret.value)
+                    && DecompilerContext.getStructContext() != null
+                    && DecompilerContext.getStructContext().instanceOf(ret.value, descRet.value));
+            // Also cast when return type is GENVAR (T) and descriptor returns Object
+            if (!needsCast && ret.type == CodeType.GENVAR
+                && descRet.type == CodeType.OBJECT) {
+              needsCast = true;
+            }
+            if (needsCast) {
+              String rendered = buf.toString();
+              int retIdx = rendered.indexOf("return ") + 7;
+              if (retIdx > 7) {
+                String afterReturn = rendered.substring(retIdx).trim();
+                if (!afterReturn.startsWith("(")) {
+                  VarType castType = ret;
+                  if (castType.type != CodeType.OBJECT && castType.type != CodeType.GENVAR) {
+                    // Primitive return — cast to boxed type
+                    for (java.util.Map.Entry<VarType, VarType> e : VarType.UNBOXING_TYPES.entrySet()) {
+                      if (e.getValue().equals(castType)) { castType = e.getKey(); break; }
+                    }
+                  }
+                  buf.setLength(retIdx);
+                  buf.append("(").appendCastTypeName(castType).append(")");
+                  buf.append(value.toJava(indent));
+                }
+              }
+            }
+          }
+        }
       }
 
       return buf;
