@@ -1,6 +1,7 @@
 // Copyright 2000-2020 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license that can be found in the LICENSE file.
 package org.jetbrains.java.decompiler.modules.decompiler.stats;
 
+import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
@@ -149,7 +150,28 @@ public class DoStatement extends Statement {
       case FOR_EACH:
         buf.appendIndent(indent).append("for (").append(initExprent.get(0).toJava(indent));
         incExprent.get(0).getInferredExprType(null); //TODO: Find a better then null? For now just calls it to clear casts if needed
-        buf.append(" : ").append(incExprent.get(0).toJava(indent)).append(") {").appendLineSeparator();
+        TextBuffer iterBuf = incExprent.get(0).toJava(indent);
+        // RTF: when the for-each variable type is specific (narrowed from Object)
+        // but the iterable is a raw collection, cast the iterable to Iterable<Type>
+        // so javac accepts the element type.
+        if (DecompilerContext.isRoundtripFidelity() && initExprent.get(0) instanceof VarExprent) {
+          VarExprent feVar = (VarExprent) initExprent.get(0);
+          VarType feType = feVar.getVarType();
+          // Check if the variable is typed as something specific (not Object/var)
+          if (feType != null && feType.type == CodeType.OBJECT
+              && !"java/lang/Object".equals(feType.value)
+              && !feVar.isUseVar()) {
+            // Check if the iterable is a raw collection (its type doesn't carry generic info)
+            VarType iterType = incExprent.get(0).getExprType();
+            if (iterType.type == CodeType.OBJECT && iterType.arrayDim == 0) {
+              // The iterable is a non-array OBJECT type. If the for-each var is narrowed,
+              // we need a cast. Emit: (Iterable<Type>)(Iterable<?>)iterable
+              String typeStr = ExprProcessor.getCastTypeName(feType);
+              iterBuf = iterBuf.enclose("(Iterable<" + typeStr + ">)(Iterable<?>)", "");
+            }
+          }
+        }
+        buf.append(" : ").append(iterBuf).append(") {").appendLineSeparator();
         buf.append(ExprProcessor.jmpWrapper(first, indent + 1, true));
         buf.appendIndent(indent).append("}").appendLineSeparator();
     }
