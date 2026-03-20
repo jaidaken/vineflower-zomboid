@@ -127,9 +127,22 @@ public class SwitchStatement extends Statement {
       buf.append("/*");
     }
 
-    buf.append(headexprent.get(0).toJava(indent)).append(" {").appendLineSeparator();
-
+    TextBuffer switchBuf = headexprent.get(0).toJava(indent);
     VarType switch_type = headexprent.get(0).getExprType();
+
+    // RTF: if the switch expression type is Object (from erased generics) but all
+    // case values are int constants, inject (int) cast. The bytecode uses
+    // LOOKUPSWITCH/TABLESWITCH which operates on int.
+    if (DecompilerContext.isRoundtripFidelity()
+        && hasOnlyIntConstCases()) {
+      String switchStr = switchBuf.toString();
+      if (switchStr.startsWith("switch (") && switchStr.endsWith(")")) {
+        String inner = switchStr.substring("switch (".length(), switchStr.length() - 1);
+        switchBuf = new TextBuffer().append("switch ((int)").append(inner).append(")");
+      }
+    }
+
+    buf.append(switchBuf).append(" {").appendLineSeparator();
 
     for (int i = 0; i < caseStatements.size(); i++) {
 
@@ -529,6 +542,18 @@ public class SwitchStatement extends Statement {
 
   public List<Exprent> getCaseGuards() {
     return caseGuards;
+  }
+
+  private boolean hasObjectReturningSwitchHead() {
+    Exprent head = headexprent.get(0);
+    if (head instanceof SwitchHeadExprent) {
+      Exprent val = ((SwitchHeadExprent) head).getValue();
+      if (val instanceof InvocationExprent) {
+        String desc = ((InvocationExprent) val).getStringDescriptor();
+        return desc != null && desc.endsWith(")Ljava/lang/Object;");
+      }
+    }
+    return false;
   }
 
   private boolean hasOnlyIntConstCases() {

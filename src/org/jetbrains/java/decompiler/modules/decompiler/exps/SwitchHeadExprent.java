@@ -98,17 +98,26 @@ public class SwitchHeadExprent extends Exprent {
     // RTF: when the switch selector would be Object at compile time (from erased
     // generics on raw collections) but the switch uses LOOKUPSWITCH/TABLESWITCH
     // (which operates on int), insert an (int) cast.
+    // The value's getExprType() may have been narrowed by checkExprTypeBounds to int,
+    // but the RENDERED expression still returns Object from the raw method call.
+    // Check the method descriptor directly.
     if (DecompilerContext.isRoundtripFidelity()) {
       boolean needsCast = false;
-      // Check if the value expression would compile to Object at Java source level
-      if (value instanceof InvocationExprent) {
-        String desc = ((InvocationExprent) value).getStringDescriptor();
+      Exprent innerValue = value;
+      // Unwrap casts to get the actual expression
+      while (innerValue instanceof FunctionExprent
+          && ((FunctionExprent)innerValue).getFuncType() == FunctionExprent.FunctionType.CAST) {
+        innerValue = ((FunctionExprent)innerValue).getLstOperands().get(0);
+      }
+      if (innerValue instanceof InvocationExprent) {
+        String desc = ((InvocationExprent) innerValue).getStringDescriptor();
         if (desc != null && desc.endsWith(")Ljava/lang/Object;")) {
           needsCast = true;
         }
-      } else if (value instanceof VarExprent) {
-        VarType vt = value.getExprType();
-        if (vt.type == CodeType.OBJECT && "java/lang/Object".equals(vt.value)) {
+      }
+      if (!needsCast && innerValue instanceof VarExprent) {
+        VarExprent ve = (VarExprent) innerValue;
+        if (ve.getLVT() != null && "java/lang/Object".equals(ve.getLVT().getVarType().value)) {
           needsCast = true;
         }
       }
