@@ -369,10 +369,11 @@ public class VarTypeProcessor {
       collectAssignmentTypes(st, minTypes, varAssignTypes);
     }
 
-    // Also check var definitions, head exprents, etc.
+    // Also check var definitions
     for (Exprent expr : stat.getVarDefinitions()) {
       collectAssignmentTypesFromExpr(expr, minTypes, varAssignTypes);
     }
+
   }
 
   private static void collectAssignmentTypesFromExpr(Exprent expr, Map<VarVersionPair, VarType> minTypes,
