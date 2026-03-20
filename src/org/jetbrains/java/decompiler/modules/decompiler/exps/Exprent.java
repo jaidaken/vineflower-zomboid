@@ -57,6 +57,10 @@ public abstract class Exprent implements IMatchable {
   public final Type type;
   public final int id;
   public BitSet bytecode = null;  // offsets of bytecode instructions decompiled to this exprent
+  // RTF: true when this expression is a standalone statement (result discarded).
+  // Set before toJava() is called. Used to skip casts that would create
+  // "not a statement" errors.
+  public boolean rtfStatementLevel = false;
 
   protected Exprent(Type type) {
     this.type = type;

@@ -937,6 +937,12 @@ public class ExprProcessor implements CodeConstants {
 
       expr.getInferredExprType(null);
 
+      // RTF: mark statement-level expressions so toJava() can skip casts
+      // that would create "not a statement" errors
+      if (DecompilerContext.isRoundtripFidelity()) {
+        expr.rtfStatementLevel = true;
+      }
+
       TextBuffer content = expr.toJava(indent);
 
       if (content.length() > 0) {

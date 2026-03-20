@@ -968,32 +968,32 @@ public class InvocationExprent extends Exprent {
 
     // RTF: when toArray(T[]) returns Object[] but the argument is typed, cast the result.
     // Skip when the return value equals the argument (standalone call for side effects).
-    if (DecompilerContext.isRoundtripFidelity() && "toArray".equals(name)
+    // RTF: when toArray(T[]) returns Object[] but the argument is typed, cast the result.
+    // Skip statement-level (standalone) calls to avoid "not a statement" errors.
+    if (DecompilerContext.isRoundtripFidelity() && !rtfStatementLevel
+        && "toArray".equals(name)
         && lstParameters.size() == 1 && instance != null
         && stringDescriptor != null && stringDescriptor.endsWith(")[Ljava/lang/Object;")) {
       VarType argType = lstParameters.get(0).getExprType();
       if (argType.arrayDim > 0 && argType.value != null && !"java/lang/Object".equals(argType.value)) {
-        // Only cast when the result is actually used (assigned/returned).
-        // Check: if the argument is a field/variable that could hold the result,
-        // and the original code discards the return, skip the cast.
-        // Heuristic: if the argument is the same as a previously assigned field,
-        // it's a fill-in-place pattern and the return is discarded.
-        boolean isStandalone = false;
-        if (lstParameters.get(0) instanceof FieldExprent || lstParameters.get(0) instanceof VarExprent) {
-          // Check if the arg matches a recently assigned LHS
-          // Actually, simpler: check if the descriptor return matches the arg type
-          // In the standalone pattern, the arg IS the result destination
-          // For now, always cast — the 3 standalone cases are rare edge cases
-        }
-        if (!isStandalone) {
-          buf = buf.enclose("(" + ExprProcessor.getCastTypeName(argType) + ")", "");
-        }
+        buf = buf.enclose("(" + ExprProcessor.getCastTypeName(argType) + ")", "");
       }
     }
 
-    // Note: Object→primitive casts for methods like getOrDefault on raw collections
-    // cannot be reliably added here because we can't distinguish used vs discarded
-    // return values. These cases are handled by PostDecompileTransforms.
+    // RTF: when the method descriptor returns Object but VF's inferred type is
+    // a primitive (int, boolean), insert a cast. Skip statement-level expressions
+    // (where the return value is discarded) to avoid "not a statement" errors.
+    if (DecompilerContext.isRoundtripFidelity() && !rtfStatementLevel
+        && !isUnboxingCall() && !isBoxingCall()
+        && invocationType != InvocationType.DYNAMIC
+        && stringDescriptor != null && stringDescriptor.endsWith(")Ljava/lang/Object;")) {
+      VarType inferred = getInferredExprType(null);
+      if (inferred != null && inferred.type != CodeType.OBJECT && inferred.type != CodeType.NULL
+          && inferred.type != CodeType.UNKNOWN && inferred.type != CodeType.VOID
+          && inferred.type != CodeType.GENVAR) {
+        buf = buf.enclose("(" + ExprProcessor.getCastTypeName(inferred) + ")", "");
+      }
+    }
 
     return buf;
   }
