@@ -299,7 +299,30 @@ public class VarDefinitionHelper {
         // AssignmentExprent in the AST. For primitive types, use rendering-time
         // default initialization via the defaultInit flag to avoid AST issues
         // with downstream passes (e.g., setNonFinal casting to VarExprent).
-        if (varType.type == CodeType.OBJECT || varType.arrayDim > 0) {
+        if (DecompilerContext.isRoundtripFidelity()) {
+          // RTF: skip = null initialization when possible — it produces ACONST_NULL + ASTORE
+          // that the original bytecode doesn't have. Check if the variable's next use after
+          // the definition point is an assignment (definitely assigned before use).
+          boolean needsNullInit = false;
+          if (varType.type == CodeType.OBJECT || varType.arrayDim > 0) {
+            // Check if the variable is used (read) before being assigned in any code path
+            // from this definition point. If yes, we need = null.
+            needsNullInit = isUsedBeforeAssigned(stat, index, first);
+          }
+          if (needsNullInit) {
+            AssignmentExprent assign = new AssignmentExprent(
+              var,
+              new ConstExprent(VarType.VARTYPE_NULL, null, null),
+              null
+            );
+            lst.add(addindex, assign);
+          } else {
+            if (varType.type != CodeType.OBJECT && varType.arrayDim == 0) {
+              var.setDefaultInit(true);
+            }
+            lst.add(addindex, var);
+          }
+        } else if (varType.type == CodeType.OBJECT || varType.arrayDim > 0) {
           AssignmentExprent assign = new AssignmentExprent(
             var,
             new ConstExprent(VarType.VARTYPE_NULL, null, null),
@@ -366,6 +389,39 @@ public class VarDefinitionHelper {
 
     VarExprent var = (VarExprent)exp;
     return var.getIndex() == index ? var.getLVT() : null;
+  }
+
+  /**
+   * RTF: check if a variable is read before being assigned on any code path
+   * from the definition point. Conservative: returns true (needs null-init)
+   * unless the variable is clearly assigned before any read.
+   */
+  private boolean isUsedBeforeAssigned(Statement defStat, int varIndex, Statement firstBlock) {
+    // If the first block has exprents, check if the first occurrence of the var is an assignment
+    List<Exprent> exprents = (firstBlock != null && firstBlock.getExprents() != null)
+        ? firstBlock.getExprents()
+        : (defStat.getExprents() != null ? defStat.getExprents() : null);
+
+    if (exprents != null) {
+      for (Exprent expr : exprents) {
+        // Check if this expression assigns to the variable
+        if (expr instanceof AssignmentExprent) {
+          Exprent left = ((AssignmentExprent) expr).getLeft();
+          if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) {
+            return false; // assigned before any read
+          }
+        }
+        // Check if this expression reads the variable
+        for (Exprent sub : expr.getAllExprents(true)) {
+          if (sub instanceof VarExprent && ((VarExprent) sub).getIndex() == varIndex) {
+            return true; // read before assigned
+          }
+        }
+      }
+    }
+
+    // Conservative: if we can't determine, assume it needs null-init
+    return true;
   }
 
   private Statement findFirstBlock(Statement stat, int varindex) {
