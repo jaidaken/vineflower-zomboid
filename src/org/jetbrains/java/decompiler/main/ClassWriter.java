@@ -242,7 +242,23 @@ public class ClassWriter implements StatementWriter {
                   buffer.append(", ");
                 }
                 VarType type = md_content.params[i];
-  
+
+                // RTF: when a lambda parameter is typed as Object (from erased generic
+                // on raw collection), get the inferred type from VF's type processor.
+                // Emit explicit type annotation so javac accepts member access on the parameter.
+                boolean emitExplicitType = false;
+                VarType inferredType = type;
+                if (DecompilerContext.isRoundtripFidelity()
+                    && type.type == CodeType.OBJECT && "java/lang/Object".equals(type.value)) {
+                  VarVersionPair vvp = new VarVersionPair(index, 0);
+                  VarType narrowed = methodWrapper.varproc.getVarType(vvp);
+                  if (narrowed != null && narrowed.type == CodeType.OBJECT
+                      && !"java/lang/Object".equals(narrowed.value)) {
+                    inferredType = narrowed;
+                    emitExplicitType = true;
+                  }
+                }
+
                 String clashingName = methodWrapper.varproc.getClashingName(new VarVersionPair(index, 0));
                 String parameterName = methodWrapper.varproc.getVarName(new VarVersionPair(index, 0));
                 if (parameterName == null) {
@@ -253,6 +269,10 @@ public class ClassWriter implements StatementWriter {
                   parameterName = clashingName;
                 }
                 parameterName = methodWrapper.methodStruct.getVariableNamer().renameParameter(mt.getAccessFlags(), type, parameterName, index);
+                if (emitExplicitType) {
+                  buffer.appendCastTypeName(inferredType);
+                  buffer.append(' ');
+                }
                 buffer.appendVariable(parameterName, true, true, node.lambdaInformation.content_class_name, node.lambdaInformation.content_method_name, md_content, index, parameterName);
   
                 firstParameter = false;
