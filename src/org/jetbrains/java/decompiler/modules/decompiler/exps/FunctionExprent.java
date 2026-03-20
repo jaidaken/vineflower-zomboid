@@ -483,6 +483,42 @@ public class FunctionExprent extends Exprent {
     return func;
   }
 
+  /**
+   * RTF: when an operand in an arithmetic expression is an InvocationExprent
+   * whose descriptor returns Object but the operand's VF type is a primitive,
+   * wrap the rendered operand with a cast to the primitive type.
+   */
+  private static TextBuffer rtfCastObjectOperand(Exprent operand, TextBuffer rendered) {
+    // Unwrap casts to find the underlying invocation
+    Exprent inner = operand;
+    while (inner instanceof FunctionExprent
+        && ((FunctionExprent) inner).getFuncType() == FunctionType.CAST) {
+      inner = ((FunctionExprent) inner).getLstOperands().get(0);
+    }
+    if (inner instanceof InvocationExprent) {
+      String desc = ((InvocationExprent) inner).getStringDescriptor();
+      if (desc != null && desc.endsWith(")Ljava/lang/Object;")) {
+        VarType exprType = operand.getExprType();
+        // Cast primitives (int, long, etc.)
+        if (exprType.type != CodeType.OBJECT && exprType.type != CodeType.NULL
+            && exprType.type != CodeType.UNKNOWN) {
+          return rendered.enclose("(" + ExprProcessor.getCastTypeName(exprType) + ")", "");
+        }
+        // When the type is still Object (not narrowed), the operand can't be
+        // used in arithmetic. Cast to the type that the OTHER operand implies.
+        // E.g., Object + 1000L → cast to (long); 1 + Object → cast to (int).
+        if (exprType.type == CodeType.OBJECT && "java/lang/Object".equals(exprType.value)) {
+          VarType inferredType = operand.getInferredExprType(null);
+          if (inferredType != null && inferredType.type != CodeType.OBJECT
+              && inferredType.type != CodeType.NULL && inferredType.type != CodeType.UNKNOWN) {
+            return rendered.enclose("(" + ExprProcessor.getCastTypeName(inferredType) + ")", "");
+          }
+        }
+      }
+    }
+    return rendered;
+  }
+
   @Override
   public boolean equals(Object o) {
     if (o == this) return true;
@@ -532,6 +568,14 @@ public class FunctionExprent extends Exprent {
       // Initialize the operands with the defaults
       TextBuffer leftOperand = wrapOperandString(left, false, indent, true);
       TextBuffer rightOperand = wrapOperandString(right, true, indent, true);
+
+      // RTF: when an operand is an InvocationExprent returning Object (from
+      // descriptor) but VF narrowed it to a primitive, the rendered Java has
+      // Object in an arithmetic context. Insert a cast to the primitive type.
+      if (DecompilerContext.isRoundtripFidelity()) {
+        leftOperand = rtfCastObjectOperand(left, leftOperand);
+        rightOperand = rtfCastObjectOperand(right, rightOperand);
+      }
 
       // Check for special cased integers on the right and left hand side, and then return if they are found.
       // This only applies to bitwise and as well as bitwise or functions.
@@ -585,12 +629,18 @@ public class FunctionExprent extends Exprent {
         }
       }
 
+      TextBuffer leftOp = wrapOperandString(left, false, indent, true);
+      TextBuffer rightOp = wrapOperandString(right, true, indent, true);
+      if (DecompilerContext.isRoundtripFidelity()) {
+        leftOp = rtfCastObjectOperand(left, leftOp);
+        rightOp = rtfCastObjectOperand(right, rightOp);
+      }
       if (!disableNewlineGroupCreation) {
         buf.pushNewlineGroup(indent, 1);
       }
-      buf.append(wrapOperandString(left, false, indent, true))
+      buf.append(leftOp)
         .appendPossibleNewline(" ").append(funcType.operator).append(" ")
-        .append(wrapOperandString(right, true, indent, true));
+        .append(rightOp);
       if (!disableNewlineGroupCreation) {
         buf.popNewlineGroup();
       }
