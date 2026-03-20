@@ -991,6 +991,10 @@ public class InvocationExprent extends Exprent {
       }
     }
 
+    // Note: Object→primitive casts for methods like getOrDefault on raw collections
+    // cannot be reliably added here because we can't distinguish used vs discarded
+    // return values. These cases are handled by PostDecompileTransforms.
+
     return buf;
   }
 
