@@ -20,7 +20,8 @@ import org.jetbrains.java.decompiler.modules.decompiler.decompose.DomHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.deobfuscator.ExceptionDeobfuscator;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.DirectGraph;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.FlattenStatementsHelper;
-import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarTypeProcessor;
 import org.jetbrains.java.decompiler.struct.StructClass;
@@ -29,6 +30,8 @@ import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
 import org.jetbrains.java.decompiler.util.DotExporter;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MethodProcessor implements Runnable {
   public static ThreadLocal<RootStatement> debugCurrentlyDecompiling = ThreadLocal.withInitial(() -> null);
@@ -520,6 +523,13 @@ public class MethodProcessor implements Runnable {
       }
     }
 
+    // RTF: hoist super()/this() out of label blocks in constructors.
+    // Label blocks can wrap the entire constructor body including super(),
+    // but Java requires super() to be the first statement.
+    if (DecompilerContext.isRoundtripFidelity() && mt.getName().equals("<init>")) {
+      hoistSuperFromLabelBlock(root);
+    }
+
     // RTF: final repair pass for orphaned label edges after all transformations.
     // Edges may have their closure set but not be registered in the closure's
     // labelEdges list, causing "break labelN;" to be emitted without a matching
@@ -562,6 +572,77 @@ public class MethodProcessor implements Runnable {
     }
 
     return root;
+  }
+
+  /**
+   * RTF: hoist super()/this() out of label blocks in constructors.
+   * When a label block wraps the entire constructor body, super() ends up inside
+   * the block. Java requires super() to be the first statement. This moves
+   * super() (and field initializations) from inside the label block to before it.
+   */
+  private static void hoistSuperFromLabelBlock(RootStatement root) {
+    Statement body = root.getFirst();
+    // Body is typically a SequenceStatement; the first child may be a labeled BasicBlockStatement
+    Statement firstStat = body;
+    if (body instanceof SequenceStatement && !body.getStats().isEmpty()) {
+      firstStat = body.getStats().get(0);
+    }
+
+    // Check if firstStat is labeled
+    if (!firstStat.isLabeled()) {
+      return;
+    }
+
+    // Find the actual basic block containing super() — it may be inside the labeled sequence
+    Statement innerBlock = firstStat;
+    while (innerBlock.getExprents() == null && !innerBlock.getStats().isEmpty()) {
+      innerBlock = innerBlock.getFirst();
+    }
+    if (innerBlock.getExprents() == null || innerBlock.getExprents().isEmpty()) {
+      return;
+    }
+
+    Exprent firstExpr = innerBlock.getExprents().get(0);
+    if (!(firstExpr instanceof InvocationExprent)) {
+      return;
+    }
+    InvocationExprent invoc = (InvocationExprent) firstExpr;
+    if (!invoc.getName().equals("<init>")) {
+      return;
+    }
+
+    // Found super()/this() inside a labeled block. Hoist it (and field inits) out.
+    List<Exprent> toHoist = new ArrayList<>();
+    List<Exprent> remaining = new ArrayList<>(innerBlock.getExprents());
+
+    // Hoist super() and subsequent field assignments (this.field = value)
+    toHoist.add(remaining.remove(0)); // super()
+    while (!remaining.isEmpty()) {
+      Exprent next = remaining.get(0);
+      if (next instanceof AssignmentExprent) {
+        Exprent left = ((AssignmentExprent) next).getLeft();
+        if (left instanceof FieldExprent && !((FieldExprent) left).isStatic()) {
+          toHoist.add(remaining.remove(0));
+          continue;
+        }
+      }
+      break;
+    }
+
+    // Put remaining exprents back in the inner block
+    innerBlock.getExprents().clear();
+    innerBlock.getExprents().addAll(remaining);
+
+    // Insert hoisted exprents as a new BasicBlockStatement before the labeled block
+    if (body instanceof SequenceStatement) {
+      BasicBlockStatement hoistBlock = BasicBlockStatement.create();
+      hoistBlock.setExprents(toHoist);
+      body.getStats().addWithKeyAndIndex(0, hoistBlock, hoistBlock.id);
+      hoistBlock.setParent(body);
+    } else {
+      // If body is not a sequence, prepend to varDefinitions
+      firstStat.getVarDefinitions().addAll(0, toHoist);
+    }
   }
 
   public RootStatement getResult() throws Throwable {
