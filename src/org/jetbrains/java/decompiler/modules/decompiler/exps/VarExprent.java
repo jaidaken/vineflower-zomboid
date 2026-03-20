@@ -328,18 +328,20 @@ public class VarExprent extends Exprent implements Pattern {
     if (DecompilerContext.isRoundtripFidelity()) {
       VarType inferred = getInferredExprType(null);
       if (inferred != null && inferred.isGeneric() && inferred.type != CodeType.GENVAR) {
-        // Check if any generic argument is a GENVAR (type variable like T, E, V).
-        // If so, we're likely inside a generic class and shouldn't use this type.
-        boolean hasGenVar = false;
+        // Check if any generic argument is a GENVAR (type variable like T, E, V)
+        // or is java/lang/Object (unresolved type variable). If so, the generic
+        // type would cause inference conflicts in javac.
+        boolean hasBadArg = false;
         if (inferred instanceof GenericType) {
           for (VarType arg : ((GenericType) inferred).getArguments()) {
-            if (arg.type == CodeType.GENVAR) {
-              hasGenVar = true;
+            if (arg.type == CodeType.GENVAR
+                || (arg.type == CodeType.OBJECT && "java/lang/Object".equals(arg.value))) {
+              hasBadArg = true;
               break;
             }
           }
         }
-        if (!hasGenVar) {
+        if (!hasBadArg) {
           return inferred;
         }
       }
