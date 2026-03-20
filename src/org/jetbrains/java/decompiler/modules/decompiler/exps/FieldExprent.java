@@ -234,7 +234,6 @@ public class FieldExprent extends Exprent {
       // (e.g., RenderThread.RenderThread → RenderThread.s_renderThread)
       else if (isStatic && classname != null) {
         String simpleClassName = classname.substring(classname.lastIndexOf('/') + 1);
-        // Handle inner classes: take the part after the last $
         if (simpleClassName.contains("$")) {
           simpleClassName = simpleClassName.substring(simpleClassName.lastIndexOf('$') + 1);
         }

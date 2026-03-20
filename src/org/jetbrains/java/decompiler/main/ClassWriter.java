@@ -257,6 +257,14 @@ public class ClassWriter implements StatementWriter {
                     inferredType = narrowed;
                     emitExplicitType = true;
                   }
+                  // If still Object, try to infer from field/method access in lambda body
+                  if (!emitExplicitType && methodWrapper.root != null) {
+                    VarType usageType = inferTypeFromUsage(methodWrapper.root, index);
+                    if (usageType != null) {
+                      inferredType = usageType;
+                      emitExplicitType = true;
+                    }
+                  }
                 }
 
                 String clashingName = methodWrapper.varproc.getClashingName(new VarVersionPair(index, 0));
@@ -2023,6 +2031,59 @@ public class ClassWriter implements StatementWriter {
     }
 
     buffer.append('>');
+  }
+
+  /**
+   * RTF: infer the type of a variable from how it's used in the statement tree.
+   * Looks for field accesses and method calls on the variable to determine its class.
+   */
+  private static VarType inferTypeFromUsage(Statement root, int varIndex) {
+    return inferTypeFromUsageRec(root, varIndex);
+  }
+
+  private static VarType inferTypeFromUsageRec(Statement stat, int varIndex) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        VarType result = inferTypeFromExpr(expr, varIndex);
+        if (result != null) return result;
+      }
+    }
+    for (Statement st : stat.getStats()) {
+      VarType result = inferTypeFromUsageRec(st, varIndex);
+      if (result != null) return result;
+    }
+    return null;
+  }
+
+  private static VarType inferTypeFromExpr(Exprent expr, int varIndex) {
+    // Method call on the variable: var.method() → class is the method's declaring class
+    if (expr instanceof InvocationExprent) {
+      InvocationExprent invoc = (InvocationExprent) expr;
+      if (invoc.getInstance() instanceof VarExprent
+          && ((VarExprent) invoc.getInstance()).getIndex() == varIndex) {
+        String className = invoc.getClassname();
+        if (className != null && !"java/lang/Object".equals(className)) {
+          return new VarType(CodeType.OBJECT, 0, className);
+        }
+      }
+    }
+    // Field access on the variable: var.field → class is the field's declaring class
+    if (expr instanceof FieldExprent) {
+      FieldExprent field = (FieldExprent) expr;
+      if (field.getInstance() instanceof VarExprent
+          && ((VarExprent) field.getInstance()).getIndex() == varIndex) {
+        String className = field.getClassname();
+        if (className != null && !"java/lang/Object".equals(className)) {
+          return new VarType(CodeType.OBJECT, 0, className);
+        }
+      }
+    }
+    // Recurse into sub-expressions
+    for (Exprent sub : expr.getAllExprents()) {
+      VarType result = inferTypeFromExpr(sub, varIndex);
+      if (result != null) return result;
+    }
+    return null;
   }
 
   private static void appendFQClassNames(TextBuffer buffer, List<String> names) {
