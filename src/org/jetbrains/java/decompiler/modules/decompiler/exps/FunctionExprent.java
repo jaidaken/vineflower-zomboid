@@ -628,15 +628,35 @@ public class FunctionExprent extends Exprent {
           buf.addTypeNameToken(objArr, 2);
         }
         return buf.append(".length");
-      case TERNARY:
+      case TERNARY: {
         buf.pushNewlineGroup(indent, 1);
-        buf.append(wrapOperandString(lstOperands.get(0), true, indent))
+        TextBuffer condBuf = wrapOperandString(lstOperands.get(0), true, indent);
+        // RTF: when ternary condition's Java type would be Object (from raw method
+        // return), cast to boolean. Object can't be used as boolean in Java.
+        // VF's getExprType() may have narrowed the type, so check the method descriptor.
+        if (DecompilerContext.isRoundtripFidelity()) {
+          Exprent condExpr = lstOperands.get(0);
+          boolean needsBoolCast = false;
+          if (condExpr instanceof InvocationExprent) {
+            String desc = ((InvocationExprent) condExpr).getStringDescriptor();
+            needsBoolCast = desc != null && desc.endsWith(")Ljava/lang/Object;");
+          }
+          if (!needsBoolCast) {
+            VarType condType = condExpr.getExprType();
+            needsBoolCast = condType.type == CodeType.OBJECT && "java/lang/Object".equals(condType.value);
+          }
+          if (needsBoolCast) {
+            condBuf = condBuf.enclose("(boolean)", "");
+          }
+        }
+        buf.append(condBuf)
           .appendPossibleNewline(" ").append("? ")
           .append(wrapOperandString(lstOperands.get(1), true, indent))
           .appendPossibleNewline(" ").append(": ")
           .append(wrapOperandString(lstOperands.get(2), true, indent));
         buf.popNewlineGroup();
         return buf;
+      }
       case INSTANCEOF:
         buf.append(wrapOperandString(lstOperands.get(0), true, indent)).append(" instanceof ");
 
