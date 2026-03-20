@@ -236,10 +236,20 @@ public class ClassWriter implements StatementWriter {
             }
           }
           if (!written) {
-            // In RTF mode, lambda params always get explicit types (to handle raw collections),
-            // which requires parentheses even for single-param lambdas: (Type x) ->
-            boolean lambdaParametersNeedParentheses = md_lambda.params.length != 1
-                || DecompilerContext.isRoundtripFidelity();
+            // Check if any lambda param will get an explicit type (needs parentheses)
+            boolean hasExplicitTypes = false;
+            if (DecompilerContext.isRoundtripFidelity()) {
+              int tmpStart = md_content.params.length - md_lambda.params.length;
+              for (int ti = tmpStart; ti < md_content.params.length; ti++) {
+                int lpi = ti - tmpStart;
+                VarType lt = lpi < md_lambda.params.length ? md_lambda.params[lpi] : null;
+                if (lt != null && md_content.params[ti].equals(lt)) {
+                  hasExplicitTypes = true;
+                  break;
+                }
+              }
+            }
+            boolean lambdaParametersNeedParentheses = md_lambda.params.length != 1 || hasExplicitTypes;
   
             if (lambdaParametersNeedParentheses) {
               buffer.append('(');
@@ -268,14 +278,21 @@ public class ClassWriter implements StatementWriter {
                 int lambdaParamIndex = i - start_index;
                 VarType lambdaType = lambdaParamIndex >= 0 && lambdaParamIndex < md_lambda.params.length
                     ? md_lambda.params[lambdaParamIndex] : null;
-                // RTF: always emit explicit lambda parameter types.
-                // When a lambda is passed to a raw collection's method (e.g., rawList.sort()),
-                // javac infers Object for the params from the erased functional interface.
-                // Explicit types force javac to use the correct types.
-                // Must type ALL params (Java doesn't allow mixing typed/untyped).
+                // RTF: emit explicit lambda parameter types ONLY when the functional
+                // interface param matches the content method param. When the functional
+                // interface has Object (from raw collection) but content method has a
+                // specific type, the explicit type causes "incompatible parameter types".
+                // In that case, skip the type and let javac infer Object.
                 if (DecompilerContext.isRoundtripFidelity()) {
-                  inferredType = type;
-                  emitExplicitType = true;
+                  int lpi = i - start_index;
+                  VarType lambdaParamType = lpi >= 0 && lpi < md_lambda.params.length
+                      ? md_lambda.params[lpi] : null;
+                  // Only emit type when: lambda interface param is NOT Object,
+                  // OR when content and lambda types match
+                  if (lambdaParamType != null && type.equals(lambdaParamType)) {
+                    inferredType = type;
+                    emitExplicitType = true;
+                  }
                 }
 
                 String clashingName = methodWrapper.varproc.getClashingName(new VarVersionPair(index, 0));
