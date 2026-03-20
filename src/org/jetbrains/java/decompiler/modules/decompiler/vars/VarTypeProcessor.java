@@ -14,6 +14,7 @@ import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -303,5 +304,96 @@ public class VarTypeProcessor {
 
   public VarType getVarType(VarVersionPair pair) {
     return mapExprentMinTypes.get(pair);
+  }
+
+  /**
+   * RTF post-pass: narrow Object-typed variables to their actual usage type.
+   * Runs after type inference stabilizes (which leaves erased generics as Object).
+   * Scans all assignments to Object variables and narrows based on RHS type.
+   * Only narrows when ALL assignments to the variable produce the same specific type.
+   */
+  public static void narrowObjectTypes(Statement root, VarProcessor varProc) {
+    Map<VarVersionPair, VarType> minTypes = varProc.getVarVersions().getTypeProcessor().getMapExprentMinTypes();
+
+    // Collect all assignments to Object-typed variables
+    Map<Integer, List<VarType>> varAssignTypes = new HashMap<>();
+    collectAssignmentTypes(root, minTypes, varAssignTypes);
+
+    // For each variable that's currently Object, check if all assignments produce
+    // the same more specific type
+    for (Map.Entry<Integer, List<VarType>> entry : varAssignTypes.entrySet()) {
+      int varIndex = entry.getKey();
+      List<VarType> types = entry.getValue();
+
+      VarVersionPair pair = new VarVersionPair(varIndex, 0);
+      VarType currentType = minTypes.get(pair);
+      if (currentType == null || !"java/lang/Object".equals(currentType.value)) {
+        continue; // not Object, skip
+      }
+
+      // Find the common non-Object type across all assignments
+      VarType narrowedType = null;
+      boolean canNarrow = true;
+      for (VarType t : types) {
+        if (t == null || "java/lang/Object".equals(t.value)) {
+          continue; // skip Object assignments (e.g., null init)
+        }
+        if (narrowedType == null) {
+          narrowedType = t;
+        } else if (!narrowedType.value.equals(t.value)) {
+          // Different types assigned - find common supertype
+          VarType common = VarType.getCommonSupertype(narrowedType, t);
+          if (common == null || "java/lang/Object".equals(common.value)) {
+            canNarrow = false;
+            break;
+          }
+          narrowedType = common;
+        }
+      }
+
+      if (canNarrow && narrowedType != null && !"java/lang/Object".equals(narrowedType.value)) {
+        minTypes.put(pair, narrowedType);
+      }
+    }
+  }
+
+  private static void collectAssignmentTypes(Statement stat, Map<VarVersionPair, VarType> minTypes,
+                                              Map<Integer, List<VarType>> varAssignTypes) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        collectAssignmentTypesFromExpr(expr, minTypes, varAssignTypes);
+      }
+    }
+
+    for (Statement st : stat.getStats()) {
+      collectAssignmentTypes(st, minTypes, varAssignTypes);
+    }
+
+    // Also check var definitions, head exprents, etc.
+    for (Exprent expr : stat.getVarDefinitions()) {
+      collectAssignmentTypesFromExpr(expr, minTypes, varAssignTypes);
+    }
+  }
+
+  private static void collectAssignmentTypesFromExpr(Exprent expr, Map<VarVersionPair, VarType> minTypes,
+                                                      Map<Integer, List<VarType>> varAssignTypes) {
+    if (expr instanceof AssignmentExprent) {
+      AssignmentExprent assign = (AssignmentExprent) expr;
+      if (assign.getLeft() instanceof VarExprent) {
+        VarExprent var = (VarExprent) assign.getLeft();
+        int index = var.getIndex();
+        VarVersionPair pair = new VarVersionPair(index, 0);
+        VarType currentType = minTypes.get(pair);
+        if (currentType != null && "java/lang/Object".equals(currentType.value)) {
+          VarType rhsType = assign.getRight().getExprType();
+          varAssignTypes.computeIfAbsent(index, k -> new ArrayList<>()).add(rhsType);
+        }
+      }
+    }
+
+    // Recurse into sub-expressions (for nested assignments in ternaries, etc.)
+    for (Exprent sub : expr.getAllExprents()) {
+      collectAssignmentTypesFromExpr(sub, minTypes, varAssignTypes);
+    }
   }
 }

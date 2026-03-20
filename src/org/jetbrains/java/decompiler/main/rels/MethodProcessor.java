@@ -22,6 +22,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.flow.DirectGraph;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.FlattenStatementsHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarProcessor;
+import org.jetbrains.java.decompiler.modules.decompiler.vars.VarTypeProcessor;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
@@ -471,6 +472,14 @@ public class MethodProcessor implements Runnable {
 
     // Apply plugin passes before setting variable definitions
     pluginContext.runPasses(JavaPassLocation.AFTER_MAIN, pctx);
+
+    // RTF: narrow Object-typed variables to their actual usage type.
+    // Type inference stabilizes with Object for erased generics because
+    // getCommonSupertype(Object, X) = Object. This post-pass examines
+    // how each Object variable is actually used and narrows the type.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      VarTypeProcessor.narrowObjectTypes(root, varProc);
+    }
 
     varProc.setVarDefinitions(root);
     decompileRecord.add("SetVarDefinitions", root);
