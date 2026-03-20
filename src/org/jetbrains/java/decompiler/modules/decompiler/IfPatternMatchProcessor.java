@@ -1,6 +1,9 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
+import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
+import org.jetbrains.java.decompiler.struct.StructMethod;
+import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
@@ -127,7 +130,7 @@ public final class IfPatternMatchProcessor {
     Exprent left = first.getAllExprents().get(0);
     Exprent right = first.getAllExprents().get(1);
 
-    boolean result = findPatternMatchingInstanceof(left, right, source, target, branch, iof, head);
+    boolean result = findPatternMatchingInstanceof(left, right, source, target, branch, iof, head, statement);
 
     if (head.getExprents() != null && !head.getExprents().isEmpty() && head.getExprents().get(0) instanceof AssignmentExprent assignment) {
       // If it's an assignement, get both sides
@@ -162,7 +165,7 @@ public final class IfPatternMatchProcessor {
     return result;
   }
 
-  private static boolean findPatternMatchingInstanceof(Exprent left, Exprent right, Exprent source, Exprent target, Statement branch, FunctionExprent iof, Statement head) {
+  private static boolean findPatternMatchingInstanceof(Exprent left, Exprent right, Exprent source, Exprent target, Statement branch, FunctionExprent iof, Statement head, IfStatement containingIf) {
     if (!(right instanceof FunctionExprent function) || function.getFuncType() != FunctionType.CAST) {
       return false;
     }
@@ -210,16 +213,32 @@ public final class IfPatternMatchProcessor {
     // This catches cases like: fromTable(KahluaTable tablex) where the instanceof
     // pattern would create a second "tablex" variable.
     int patternIndex = ((VarExprent) left).getIndex();
-    // Check all exprents in the if-statement's condition
-    IfStatement ifStat = null;
-    Statement p = branch.getParent();
-    if (p instanceof IfStatement) {
-      ifStat = (IfStatement) p;
-    }
-    if (ifStat != null && ifStat.getHeadexprent() != null) {
-      for (Exprent sub : ifStat.getHeadexprent().getAllExprents(true, true)) {
+    // Check all exprents in the if-statement's condition using the directly-passed IfStatement
+    if (containingIf != null && containingIf.getHeadexprent() != null) {
+      for (Exprent sub : containingIf.getHeadexprent().getAllExprents(true, true)) {
         if (sub instanceof VarExprent && ((VarExprent) sub).getIndex() == patternIndex) {
           return false;
+        }
+      }
+    }
+    // RTF: also check if the pattern variable index matches a method parameter.
+    // Method parameters occupy the first N variable slots. If the pattern variable
+    // would reuse a parameter's slot, it shadows the parameter.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      // Get the StructMethod from the root statement
+      Statement root = containingIf;
+      while (root != null && !(root instanceof RootStatement)) {
+        root = root.getParent();
+      }
+      if (root instanceof RootStatement) {
+        StructMethod mt = ((RootStatement) root).mt;
+        MethodDescriptor md = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+        int paramSlot = mt.hasModifier(CodeConstants.ACC_STATIC) ? 0 : 1; // skip 'this'
+        for (int i = 0; i < md.params.length; i++) {
+          if (paramSlot == patternIndex) {
+            return false; // pattern would shadow method parameter
+          }
+          paramSlot += md.params[i].stackSize;
         }
       }
     }
