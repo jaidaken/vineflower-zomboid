@@ -196,7 +196,15 @@ public class FunctionExprent extends Exprent {
       case BIT_NOT:
       case NEG:
         return getMaxVarType(lstOperands.get(0).getExprType());
-      case ADD:
+      case ADD: {
+        VarType left = lstOperands.get(0).getExprType();
+        VarType right = lstOperands.get(1).getExprType();
+        // String + anything = String (Java string concatenation)
+        if (VarType.VARTYPE_STRING.equals(left) || VarType.VARTYPE_STRING.equals(right)) {
+          return VarType.VARTYPE_STRING;
+        }
+        return getMaxVarType(left, right);
+      }
       case SUB:
       case MUL:
       case DIV:

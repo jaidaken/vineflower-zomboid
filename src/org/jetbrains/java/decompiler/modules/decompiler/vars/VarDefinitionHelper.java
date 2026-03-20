@@ -563,17 +563,24 @@ public class VarDefinitionHelper {
         VarExprent var = (VarExprent)left;
         if (var.getIndex() == index) {
           var.setDefinition(true);
-          // RTF: when a variable is typed as Object, initialized from a method
-          // call/field/array access, and NOT reassigned later, render as 'var'
-          // so javac infers the correct erased type from the RHS.
+          // RTF: when a variable is typed as Object, initialized from an expression
+          // that javac can infer a specific type from, and NOT reassigned later,
+          // render as 'var' so javac recovers the erased generic type.
+          // var produces identical bytecode because generics are erased at compile time.
           if (DecompilerContext.isRoundtripFidelity() && multiAssignedVars != null
               && !multiAssignedVars.contains(index)) {
             VarType varType = var.getVarType();
             if (varType != null && "java/lang/Object".equals(varType.value) && varType.arrayDim == 0) {
               Exprent right = assign.getRight();
+              // Only use var when the RHS gives javac enough info to infer the type.
+              // Exclude: null literals, plain variable references (still Object),
+              //          ConstExprent (literal values typed as Object)
               if (right instanceof InvocationExprent
                   || right instanceof FieldExprent
-                  || right instanceof ArrayExprent) {
+                  || right instanceof ArrayExprent
+                  || right instanceof NewExprent
+                  || (right instanceof FunctionExprent
+                      && ((FunctionExprent)right).getFuncType() == FunctionExprent.FunctionType.CAST)) {
                 var.setUseVar(true);
               }
             }

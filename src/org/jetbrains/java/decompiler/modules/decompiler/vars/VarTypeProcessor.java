@@ -188,7 +188,10 @@ public class VarTypeProcessor {
             // when the LVT says int (the original source used int).
             // Don't pin byte/short/char/boolean — those LVT types mean the programmer
             // intended the narrow type.
-            if (lvtType.type == CodeType.OBJECT || lvtType.equals(VarType.VARTYPE_INT)) {
+            if ((lvtType.type == CodeType.OBJECT && !"java/lang/Object".equals(lvtType.value))
+                || lvtType.equals(VarType.VARTYPE_INT)) {
+              // Don't pin java/lang/Object — it's too generic (usually from erased generics).
+              // Let VF's type inference recover the real type from usage context.
               // Don't pin if the proposed type is incompatible with the LVT type.
               // This handles variables reassigned to different subtypes (e.g., a variable
               // declared as IsoWindow in LVT but also assigned from IsoThumpable).

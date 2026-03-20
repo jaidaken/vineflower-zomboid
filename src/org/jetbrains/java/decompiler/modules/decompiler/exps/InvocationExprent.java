@@ -657,6 +657,14 @@ public class InvocationExprent extends Exprent {
       }
     }
 
+    // makeConcatWithConstants/makeConcat always returns String, even though the
+    // INVOKEDYNAMIC descriptor may say Object. Fix the return type so VF's type
+    // inference correctly types variables assigned from string concatenation.
+    if (invocationType == InvocationType.DYNAMIC
+        && ("makeConcatWithConstants".equals(name) || "makeConcat".equals(name))) {
+      return VarType.VARTYPE_STRING;
+    }
+
     return getExprType();
   }
 
