@@ -366,6 +366,75 @@ public class VarTypeProcessor {
     }
   }
 
+  /**
+   * Collect usage-based type info for Object-typed variables.
+   * When a variable is used as the instance of a method call or field access,
+   * the declaring class of that method/field tells us the real type.
+   */
+  private static void collectUsageTypes(Statement stat, Map<VarVersionPair, VarType> minTypes,
+                                         Map<Integer, List<VarType>> varAssignTypes) {
+    collectUsageTypesFromStat(stat, minTypes, varAssignTypes);
+  }
+
+  private static void collectUsageTypesFromStat(Statement stat, Map<VarVersionPair, VarType> minTypes,
+                                                 Map<Integer, List<VarType>> varAssignTypes) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        collectUsageTypesFromExpr(expr, minTypes, varAssignTypes);
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      collectUsageTypesFromExpr(expr, minTypes, varAssignTypes);
+    }
+    for (Statement st : stat.getStats()) {
+      collectUsageTypesFromStat(st, minTypes, varAssignTypes);
+    }
+  }
+
+  private static void collectUsageTypesFromExpr(Exprent expr, Map<VarVersionPair, VarType> minTypes,
+                                                 Map<Integer, List<VarType>> varAssignTypes) {
+    // Check if this is a method call on an Object-typed variable
+    if (expr instanceof InvocationExprent) {
+      InvocationExprent invoc = (InvocationExprent) expr;
+      Exprent inst = invoc.getInstance();
+      if (inst instanceof VarExprent) {
+        VarExprent var = (VarExprent) inst;
+        VarVersionPair pair = new VarVersionPair(var.getIndex(), 0);
+        VarType currentType = minTypes.get(pair);
+        if (currentType != null && "java/lang/Object".equals(currentType.value)) {
+          // The variable is Object but used as instance for a method call.
+          // The method's declaring class is the real type.
+          String className = invoc.getClassname();
+          if (className != null && !"java/lang/Object".equals(className)) {
+            varAssignTypes.computeIfAbsent(var.getIndex(), k -> new ArrayList<>())
+                .add(new VarType(CodeType.OBJECT, 0, className));
+          }
+        }
+      }
+    }
+    // Check field access on Object-typed variable
+    if (expr instanceof FieldExprent) {
+      FieldExprent field = (FieldExprent) expr;
+      Exprent inst = field.getInstance();
+      if (inst instanceof VarExprent) {
+        VarExprent var = (VarExprent) inst;
+        VarVersionPair pair = new VarVersionPair(var.getIndex(), 0);
+        VarType currentType = minTypes.get(pair);
+        if (currentType != null && "java/lang/Object".equals(currentType.value)) {
+          String className = field.getClassname();
+          if (className != null && !"java/lang/Object".equals(className)) {
+            varAssignTypes.computeIfAbsent(var.getIndex(), k -> new ArrayList<>())
+                .add(new VarType(CodeType.OBJECT, 0, className));
+          }
+        }
+      }
+    }
+    // Recurse
+    for (Exprent sub : expr.getAllExprents()) {
+      collectUsageTypesFromExpr(sub, minTypes, varAssignTypes);
+    }
+  }
+
   private static void collectForEachVars(Statement stat, Set<Integer> forEachVars) {
     if (stat instanceof DoStatement) {
       DoStatement doStat = (DoStatement) stat;
