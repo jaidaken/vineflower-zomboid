@@ -657,8 +657,28 @@ public class FunctionExprent extends Exprent {
         buf.popNewlineGroup();
         return buf;
       }
-      case INSTANCEOF:
-        buf.append(wrapOperandString(lstOperands.get(0), true, indent)).append(" instanceof ");
+      case INSTANCEOF: {
+        TextBuffer instOfLeft = wrapOperandString(lstOperands.get(0), true, indent);
+        // RTF: when the left operand's type is provably incompatible with the
+        // instanceof target, cast to Object first. javac rejects instanceof on
+        // unrelated types but the bytecode is valid.
+        if (DecompilerContext.isRoundtripFidelity() && lstOperands.size() >= 2) {
+          VarType leftType = lstOperands.get(0).getExprType();
+          VarType rightType = lstOperands.get(1).getExprType();
+          if (leftType.type == CodeType.OBJECT && rightType.type == CodeType.OBJECT
+              && leftType.value != null && rightType.value != null
+              && !leftType.value.equals(rightType.value)
+              && !"java/lang/Object".equals(leftType.value)) {
+            // Check if left is NOT a supertype of right
+            boolean compatible = DecompilerContext.getStructContext() != null
+                && (DecompilerContext.getStructContext().instanceOf(leftType.value, rightType.value)
+                    || DecompilerContext.getStructContext().instanceOf(rightType.value, leftType.value));
+            if (!compatible) {
+              instOfLeft = instOfLeft.enclose("(Object)", "");
+            }
+          }
+        }
+        buf.append(instOfLeft).append(" instanceof ");
 
         if (this.lstOperands.size() > 2) {
           // Pattern instanceof creation- only happens when we have more than 2 exprents
@@ -675,6 +695,7 @@ public class FunctionExprent extends Exprent {
 
 
         return buf;
+      }
       case LCMP:
       case FCMPL:
       case FCMPG:

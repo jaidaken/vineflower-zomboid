@@ -665,6 +665,15 @@ public class InvocationExprent extends Exprent {
       return VarType.VARTYPE_STRING;
     }
 
+    // toArray(T[]) on raw collections: return the argument's array type instead of Object[].
+    // The bytecode descriptor returns Object[] but the actual type matches the argument.
+    if ("toArray".equals(name) && lstParameters.size() == 1 && instance != null) {
+      VarType argType = lstParameters.get(0).getExprType();
+      if (argType.arrayDim > 0 && !"java/lang/Object".equals(argType.value)) {
+        return argType;
+      }
+    }
+
     return getExprType();
   }
 
@@ -935,6 +944,18 @@ public class InvocationExprent extends Exprent {
     if (pushedCallChainGroup) {
       buf.popNewlineGroup();
     }
+
+    // RTF: when toArray(T[]) returns Object[] from raw collection but the argument
+    // is a typed array, cast the result to the argument's array type.
+    if (DecompilerContext.isRoundtripFidelity() && "toArray".equals(name)
+        && lstParameters.size() == 1 && instance != null
+        && stringDescriptor != null && stringDescriptor.endsWith(")[Ljava/lang/Object;")) {
+      VarType argType = lstParameters.get(0).getExprType();
+      if (argType.arrayDim > 0 && argType.value != null && !"java/lang/Object".equals(argType.value)) {
+        buf = buf.enclose("(" + ExprProcessor.getCastTypeName(argType) + ")", "");
+      }
+    }
+
     return buf;
   }
 
