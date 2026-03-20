@@ -86,13 +86,33 @@ public class ImportCollector {
     if (shortName == null) {
       return "<unknownclass>";
     }
-    
+
     if (setFieldNames.contains(shortName)) {
       return classToName;
     }
-    else {
-      return shortName;
+
+    // For dotted names like "OuterClass.InnerClass", check if the leading
+    // component conflicts with a field name. This handles cases where a
+    // static field shadows the enclosing class name (e.g., class RenderThread
+    // has a field named RenderThread, making "RenderThread.s_performance"
+    // ambiguous — javac resolves RenderThread as the field, not the class).
+    int dot = shortName.indexOf('.');
+    if (dot > 0) {
+      String leadingComponent = shortName.substring(0, dot);
+      if (setFieldNames.contains(leadingComponent)) {
+        ClassNode currCls = (ClassNode) DecompilerContext.getContextProperty(
+            DecompilerContext.CURRENT_CLASS_NODE);
+        if (currCls != null && leadingComponent.equals(currCls.simpleName)) {
+          // Inside the enclosing class: inner class is directly accessible
+          // without the outer class qualifier
+          return shortName.substring(dot + 1);
+        }
+        // Outside the class: use fully qualified name to avoid ambiguity
+        return classToName;
+      }
     }
+
+    return shortName;
   }
 
   public String getShortName(String fullName) {

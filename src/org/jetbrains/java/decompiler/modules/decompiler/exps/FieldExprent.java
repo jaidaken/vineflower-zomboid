@@ -230,17 +230,11 @@ public class FieldExprent extends Exprent {
       if ("$assertionsDisabled".equals(name)) {
         renderedName = "_assertionsDisabled";
       }
-      // Rename static fields that shadow their declaring class name
-      // (e.g., RenderThread.RenderThread → RenderThread.s_renderThread)
-      else if (isStatic && classname != null) {
-        String simpleClassName = classname.substring(classname.lastIndexOf('/') + 1);
-        if (simpleClassName.contains("$")) {
-          simpleClassName = simpleClassName.substring(simpleClassName.lastIndexOf('$') + 1);
-        }
-        if (name.equals(simpleClassName)) {
-          renderedName = "s_" + Character.toLowerCase(name.charAt(0)) + name.substring(1);
-        }
-      }
+      // Note: NOT renaming static fields that shadow class names in RTF mode.
+      // The original bytecode uses the shadowing name and the rename would cause
+      // permanent GETSTATIC/PUTSTATIC mismatch. Ambiguity is handled by
+      // ImportCollector.getShortNameInClassContext stripping the outer class
+      // qualifier for inner class references.
     }
     buf.appendField(renderedName, false, classname, renderedName, descriptor);
 

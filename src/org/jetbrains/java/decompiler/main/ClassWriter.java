@@ -175,7 +175,17 @@ public class ClassWriter implements StatementWriter {
         }
         else {
           // reference to a static method
-          buffer.appendCastTypeName(new VarType(node.lambdaInformation.content_class_name, true));
+          // RTF: use field-name-aware class resolution to avoid ambiguity
+          // when a field shadows the class name (e.g., RenderThread::renderStep
+          // where RenderThread is also a field name)
+          if (DecompilerContext.isRoundtripFidelity()) {
+            String contextName = DecompilerContext.getImportCollector()
+                .getShortNameInClassContext(
+                    ExprProcessor.buildJavaClassName(node.lambdaInformation.content_class_name));
+            buffer.append(contextName);
+          } else {
+            buffer.appendCastTypeName(new VarType(node.lambdaInformation.content_class_name, true));
+          }
         }
 
         buffer.append("::")
@@ -861,16 +871,7 @@ public class ClassWriter implements StatementWriter {
       if ("$assertionsDisabled".equals(name)) {
         name = "_assertionsDisabled";
       }
-      // Rename static fields that shadow their declaring class name
-      else if (fd.hasModifier(CodeConstants.ACC_STATIC)) {
-        String simpleClassName = cl.qualifiedName.substring(cl.qualifiedName.lastIndexOf('/') + 1);
-        if (simpleClassName.contains("$")) {
-          simpleClassName = simpleClassName.substring(simpleClassName.lastIndexOf('$') + 1);
-        }
-        if (name.equals(simpleClassName)) {
-          name = "s_" + Character.toLowerCase(name.charAt(0)) + name.substring(1);
-        }
-      }
+      // Note: NOT renaming static fields that shadow class names in RTF mode.
     }
     if (interceptor != null) {
       String newName = interceptor.getName(cl.qualifiedName + " " + fd.getName() + " " + fd.getDescriptor());
