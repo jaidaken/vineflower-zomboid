@@ -517,6 +517,7 @@ public class MethodProcessor implements Runnable {
     // label declaration.
     if (DecompilerContext.isRoundtripFidelity()) {
       LabelHelper.repairOrphanedLabels(root);
+      LabelHelper.repairNullClosures(root);
     }
 
     // RTF: ensure non-void methods have return statements on all code paths.

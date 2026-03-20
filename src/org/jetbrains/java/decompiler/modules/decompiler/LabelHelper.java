@@ -750,6 +750,73 @@ public final class LabelHelper {
     }
   }
 
+  /**
+   * RTF: fix break/continue edges that have labeled=true but closure=null.
+   * This happens when loop enhancement is skipped — the break edge's closure
+   * was supposed to be set during the infinite→while conversion but wasn't.
+   * Walk up the parent chain from the edge source to find the enclosing loop
+   * or switch statement and assign it as the closure.
+   */
+  public static void repairNullClosures(Statement root) {
+    repairNullClosuresRec(root);
+  }
+
+  private static void repairNullClosuresRec(Statement stat) {
+    for (StatEdge edge : stat.getAllSuccessorEdges()) {
+      if (edge.labeled && edge.closure == null
+          && (edge.getType() == StatEdge.TYPE_BREAK || edge.getType() == StatEdge.TYPE_CONTINUE)) {
+        // Walk up from source to find enclosing loop or switch
+        Statement closure = findEnclosingLoopOrSwitch(edge.getSource(), edge.getDestination());
+        if (closure != null) {
+          edge.closure = closure;
+          if (!closure.getLabelEdges().contains(edge)) {
+            closure.getLabelEdges().add(edge);
+          }
+        } else {
+          // Can't find closure — remove the label to avoid <unknownclosure>
+          edge.labeled = false;
+        }
+      }
+    }
+
+    if (stat instanceof IfStatement) {
+      IfStatement ifStat = (IfStatement) stat;
+      if (ifStat.getIfEdge() != null) {
+        StatEdge edge = ifStat.getIfEdge();
+        if (edge.labeled && edge.closure == null
+            && (edge.getType() == StatEdge.TYPE_BREAK || edge.getType() == StatEdge.TYPE_CONTINUE)) {
+          Statement closure = findEnclosingLoopOrSwitch(edge.getSource(), edge.getDestination());
+          if (closure != null) {
+            edge.closure = closure;
+            if (!closure.getLabelEdges().contains(edge)) {
+              closure.getLabelEdges().add(edge);
+            }
+          } else {
+            edge.labeled = false;
+          }
+        }
+      }
+    }
+
+    for (Statement st : stat.getStats()) {
+      repairNullClosuresRec(st);
+    }
+  }
+
+  private static Statement findEnclosingLoopOrSwitch(Statement source, Statement dest) {
+    Statement current = source;
+    while (current != null) {
+      if (current instanceof DoStatement || current instanceof SwitchStatement) {
+        // Check if the destination is outside this loop/switch
+        if (!current.containsStatementStrict(dest)) {
+          return current;
+        }
+      }
+      current = current.getParent();
+    }
+    return null;
+  }
+
   private static void repairEdge(StatEdge edge, Set<Statement> treeStatements) {
     if (edge.explicit && edge.labeled && edge.closure != null) {
       if (!treeStatements.contains(edge.closure)) {
