@@ -509,8 +509,11 @@ public class FunctionExprent extends Exprent {
         // E.g., Object + 1000L → cast to (long); 1 + Object → cast to (int).
         if (exprType.type == CodeType.OBJECT && "java/lang/Object".equals(exprType.value)) {
           VarType inferredType = operand.getInferredExprType(null);
-          if (inferredType != null && inferredType.type != CodeType.OBJECT
-              && inferredType.type != CodeType.NULL && inferredType.type != CodeType.UNKNOWN) {
+          if (inferredType != null && inferredType.type != CodeType.NULL
+              && inferredType.type != CodeType.UNKNOWN
+              && !"java/lang/Object".equals(inferredType.value)) {
+            // For boxed types (Integer, Long), cast to the boxed type —
+            // javac will auto-unbox for arithmetic
             return rendered.enclose("(" + ExprProcessor.getCastTypeName(inferredType) + ")", "");
           }
         }
