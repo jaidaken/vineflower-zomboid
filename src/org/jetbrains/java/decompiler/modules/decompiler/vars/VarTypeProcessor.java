@@ -16,9 +16,11 @@ import org.jetbrains.java.decompiler.struct.gen.VarType;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class VarTypeProcessor {
   public enum FinalType {
@@ -315,6 +317,10 @@ public class VarTypeProcessor {
   public static void narrowObjectTypes(Statement root, VarProcessor varProc) {
     Map<VarVersionPair, VarType> minTypes = varProc.getVarVersions().getTypeProcessor().getMapExprentMinTypes();
 
+    // Collect for-each variable indices — don't narrow these since they need var
+    Set<Integer> forEachVars = new HashSet<>();
+    collectForEachVars(root, forEachVars);
+
     // Collect all assignments to Object-typed variables
     Map<Integer, List<VarType>> varAssignTypes = new HashMap<>();
     collectAssignmentTypes(root, minTypes, varAssignTypes);
@@ -329,6 +335,9 @@ public class VarTypeProcessor {
       VarType currentType = minTypes.get(pair);
       if (currentType == null || !"java/lang/Object".equals(currentType.value)) {
         continue; // not Object, skip
+      }
+      if (forEachVars.contains(varIndex)) {
+        continue; // don't narrow for-each vars — they need var for raw collections
       }
 
       // Find the common non-Object type across all assignments
@@ -354,6 +363,18 @@ public class VarTypeProcessor {
       if (canNarrow && narrowedType != null && !"java/lang/Object".equals(narrowedType.value)) {
         minTypes.put(pair, narrowedType);
       }
+    }
+  }
+
+  private static void collectForEachVars(Statement stat, Set<Integer> forEachVars) {
+    if (stat instanceof DoStatement) {
+      DoStatement doStat = (DoStatement) stat;
+      if (doStat.getLooptype() == DoStatement.Type.FOR_EACH && doStat.getInitExprent() instanceof VarExprent) {
+        forEachVars.add(((VarExprent) doStat.getInitExprent()).getIndex());
+      }
+    }
+    for (Statement st : stat.getStats()) {
+      collectForEachVars(st, forEachVars);
     }
   }
 

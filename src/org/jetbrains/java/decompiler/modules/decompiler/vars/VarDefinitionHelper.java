@@ -235,9 +235,12 @@ public class VarDefinitionHelper {
             VarExprent var = (VarExprent)dstat.getInitExprent();
             if (var.getIndex() == index) {
               var.setDefinition(true);
-              // RTF: for-each variables typed as Object should use 'var'
-              // so javac infers the element type from the iterable.
-              // Safe because for-each variables are never reassigned.
+              // RTF: for-each variables should use 'var' when the iterable is
+              // a raw collection. Javac infers the element type from the iterable,
+              // which works for generic collections but fails for raw ones (returns Object).
+              // Using 'var' lets javac infer from the actual method signatures.
+              // Check: use var if the variable's type is Object, OR if the iterable's
+              // element type would be Object (raw collection).
               if (DecompilerContext.isRoundtripFidelity()) {
                 VarType vt = var.getVarType();
                 if (vt != null && "java/lang/Object".equals(vt.value) && vt.arrayDim == 0) {

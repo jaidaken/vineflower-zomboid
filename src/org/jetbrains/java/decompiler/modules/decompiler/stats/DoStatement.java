@@ -8,6 +8,8 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Pattern;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
+import org.jetbrains.java.decompiler.struct.gen.CodeType;
+import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.TextBuffer;
 
 import java.util.ArrayList;
@@ -21,6 +23,8 @@ public class DoStatement extends Statement {
   }
 
   private Type looptype;
+
+  private boolean rtfForceForEachVar = false;
 
   private final List<Exprent> initExprent = new ArrayList<>();
   private final List<Exprent> conditionExprent = new ArrayList<>();
@@ -277,5 +281,9 @@ public class DoStatement extends Statement {
 
   public void setLooptype(Type looptype) {
     this.looptype = looptype;
+  }
+
+  public void setRtfForceForEachVar(boolean val) {
+    this.rtfForceForEachVar = val;
   }
 }

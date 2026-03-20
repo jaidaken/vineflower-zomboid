@@ -482,6 +482,10 @@ public class MethodProcessor implements Runnable {
     // how each Object variable is actually used and narrows the type.
     if (DecompilerContext.isRoundtripFidelity()) {
       VarTypeProcessor.narrowObjectTypes(root, varProc);
+      // Mark all for-each loops to force var for their variables.
+      // This must happen after narrowing so that for-each vars that were
+      // narrowed from Object still get var (needed for raw collections).
+      markForEachVar(root);
     }
 
     varProc.setVarDefinitions(root);
@@ -572,6 +576,25 @@ public class MethodProcessor implements Runnable {
     }
 
     return root;
+  }
+
+  /**
+   * RTF: mark all for-each loops to force var for their iteration variable.
+   */
+  private static void markForEachVar(RootStatement root) {
+    markForEachVarRec(root);
+  }
+
+  private static void markForEachVarRec(Statement stat) {
+    if (stat instanceof DoStatement) {
+      DoStatement doStat = (DoStatement) stat;
+      if (doStat.getLooptype() == DoStatement.Type.FOR_EACH) {
+        doStat.setRtfForceForEachVar(true);
+      }
+    }
+    for (Statement st : stat.getStats()) {
+      markForEachVarRec(st);
+    }
   }
 
   /**
