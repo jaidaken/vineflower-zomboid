@@ -236,7 +236,10 @@ public class ClassWriter implements StatementWriter {
             }
           }
           if (!written) {
-            boolean lambdaParametersNeedParentheses = md_lambda.params.length != 1;
+            // In RTF mode, lambda params always get explicit types (to handle raw collections),
+            // which requires parentheses even for single-param lambdas: (Type x) ->
+            boolean lambdaParametersNeedParentheses = md_lambda.params.length != 1
+                || DecompilerContext.isRoundtripFidelity();
   
             if (lambdaParametersNeedParentheses) {
               buffer.append('(');
