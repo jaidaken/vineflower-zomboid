@@ -832,13 +832,34 @@ public class InvocationExprent extends Exprent {
                 }
 
                 if (skipCast) {
+                  // RTF: don't skip the cast if the underlying expression returns
+                  // Object at the Java source level (e.g., rawget returning Object
+                  // that needs to be cast to Boolean before unboxing)
+                  if (DecompilerContext.isRoundtripFidelity() && firstParam instanceof InvocationExprent) {
+                    String fpDesc = ((InvocationExprent) firstParam).getStringDescriptor();
+                    if (fpDesc != null && fpDesc.endsWith(")Ljava/lang/Object;")) {
+                      skipCast = false;
+                    }
+                  }
+                }
+                if (skipCast) {
                   buf.append(firstParam.toJava(indent));
                   return buf;
                 }
               }
             }
 
-            buf.append(instance.toJava(indent));
+            TextBuffer instBuf = instance.toJava(indent);
+            // RTF: when the unboxing call is on an instance that returns Object
+            // at the Java source level, add an explicit cast to the primitive type.
+            // Without this, javac sees Object in boolean/int/etc. context.
+            if (DecompilerContext.isRoundtripFidelity() && instance instanceof InvocationExprent) {
+              String instDesc = ((InvocationExprent) instance).getStringDescriptor();
+              if (instDesc != null && instDesc.endsWith(")Ljava/lang/Object;")) {
+                instBuf = instBuf.enclose("(" + ExprProcessor.getCastTypeName(descriptor.ret) + ")", "");
+              }
+            }
+            buf.append(instBuf);
             return buf;
           }
 
