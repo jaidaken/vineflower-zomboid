@@ -257,11 +257,22 @@ public class AssignmentExprent extends Exprent {
             if (rawRight instanceof InvocationExprent) {
               InvocationExprent rightInv = (InvocationExprent) rawRight;
               String desc = rightInv.getStringDescriptor();
-              if (desc != null && desc.endsWith(")Ljava/lang/Object;")
-                  && leftType != null && !"java/lang/Object".equals(leftType.value)
-                  && leftType.type != CodeType.NULL && leftType.type != CodeType.UNKNOWN
-                  && leftType.type != CodeType.GENVAR
-                  && !rightInv.isUnboxingCall() && !rightInv.isBoxingCall()) {
+              // Check: does the descriptor return a type that is WIDER than the LHS?
+              // This catches Object → specific, Annotation → CommandName, etc.
+              VarType descReturnType = rightInv.getDescriptor().ret;
+              boolean descriptorReturnsWider = desc != null
+                  && leftType != null && leftType.type != CodeType.NULL
+                  && leftType.type != CodeType.UNKNOWN && leftType.type != CodeType.GENVAR
+                  && !rightInv.isUnboxingCall() && !rightInv.isBoxingCall()
+                  && descReturnType != null && !descReturnType.equals(leftType)
+                  && (descReturnType.equals(VarType.VARTYPE_OBJECT)
+                      || (descReturnType.type == CodeType.OBJECT
+                          && leftType.type == CodeType.OBJECT
+                          && !"java/lang/Object".equals(leftType.value)
+                          && DecompilerContext.getStructContext() != null
+                          && DecompilerContext.getStructContext().instanceOf(
+                              leftType.value, descReturnType.value)));
+              if (descriptorReturnsWider) {
                 // Check if the buffer already has a cast after the "= "
                 String rendered = buffer.toString();
                 int eqIdx = rendered.lastIndexOf("= ");
