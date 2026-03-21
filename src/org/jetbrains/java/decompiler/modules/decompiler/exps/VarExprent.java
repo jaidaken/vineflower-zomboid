@@ -419,6 +419,7 @@ public class VarExprent extends Exprent implements Pattern {
         boolean hasBadArg = false;
         if (inferred instanceof GenericType) {
           for (VarType arg : ((GenericType) inferred).getArguments()) {
+            if (arg == null) { hasBadArg = true; break; }
             if (arg.type == CodeType.GENVAR
                 || (arg.type == CodeType.OBJECT && "java/lang/Object".equals(arg.value))) {
               hasBadArg = true;
@@ -440,7 +441,7 @@ public class VarExprent extends Exprent implements Pattern {
               if (!args.isEmpty() && args.size() <= numClassTypeParams) {
                 boolean allConcrete = true;
                 for (VarType arg : args) {
-                  if (arg.type == CodeType.GENVAR || "java/lang/Object".equals(arg.value)) {
+                  if (arg == null || arg.type == CodeType.GENVAR || "java/lang/Object".equals(arg.value)) {
                     allConcrete = false;
                     break;
                   }
