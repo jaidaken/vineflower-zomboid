@@ -376,6 +376,7 @@ public class VarType {
   public static boolean hasObjectOrGenvarArgs(VarType type) {
     if (type instanceof org.jetbrains.java.decompiler.struct.gen.generics.GenericType) {
       for (VarType arg : ((org.jetbrains.java.decompiler.struct.gen.generics.GenericType) type).getArguments()) {
+        if (arg == null) continue;
         // Object args indicate unresolved type variables — filter these
         if (arg.type == CodeType.OBJECT && "java/lang/Object".equals(arg.value)) return true;
         // DON'T filter GENVAR args — they're valid type parameters (K, V, T)

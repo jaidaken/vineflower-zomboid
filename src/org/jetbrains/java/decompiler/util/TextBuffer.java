@@ -99,7 +99,12 @@ public class TextBuffer {
   }
 
   public TextBuffer appendCastTypeName(VarType type) {
-    return appendCastTypeName(ExprProcessor.getCastTypeName(type), type);
+    String castName = ExprProcessor.getCastTypeName(type);
+    if (ExprProcessor.isInvalidTypeName(castName)) {
+      castName = "Object";
+      type = VarType.VARTYPE_OBJECT;
+    }
+    return appendCastTypeName(castName, type);
   }
 
   public TextBuffer appendCastTypeName(String castName, VarType type) {

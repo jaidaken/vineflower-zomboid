@@ -276,6 +276,9 @@ public class StructContext {
 
   // return (valclass instanceof reflcass)
   public boolean instanceOf(String valclass, String refclass) {
+    if (valclass == null || refclass == null) {
+      return false;
+    }
     if (valclass.equals(refclass)) {
       return true;
     }

@@ -225,7 +225,10 @@ public class VarExprent extends Exprent implements Pattern {
           DecompilerContext.getImportCollector().ensureImported(fullName);
         }
         String name = ExprProcessor.getCastTypeName(definitionType);
-        if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType || useVar) {
+        // Use 'Object' for null/unknown types instead of 'var' (var can't be null-initialized)
+        if (ExprProcessor.isInvalidTypeName(name) && !isIntersectionType && !useVar) {
+          buffer.append("Object");
+        } else if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType || useVar) {
           buffer.append("var");
         } else {
           buffer.appendCastTypeName(definitionType);
