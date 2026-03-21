@@ -377,7 +377,7 @@ public class VarTypeProcessor {
         }
         if (narrowedType == null) {
           narrowedType = t;
-        } else if (!narrowedType.value.equals(t.value)) {
+        } else if (narrowedType.value == null || !narrowedType.value.equals(t.value)) {
           // Different types assigned - find common supertype
           VarType common = VarType.getCommonSupertype(narrowedType, t);
           if (common == null || "java/lang/Object".equals(common.value)) {
