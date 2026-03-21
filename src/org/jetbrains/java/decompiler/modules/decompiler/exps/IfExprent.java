@@ -54,9 +54,17 @@ public class IfExprent extends Exprent {
   }
 
   private Exprent condition;
+  // RTF: the original bytecode condition type (before VF's initial negation).
+  // This is the negation of ifType passed to the constructor (since ExprProcessor
+  // passes getNegative()). Used by post-passes to detect when the condition was
+  // flipped from the original bytecode direction.
+  private Type originalBytecodeType;
 
   public IfExprent(Type ifType, ListStack<Exprent> stack, BitSet bytecodeOffsets) {
     this(null, bytecodeOffsets);
+    // ifType is already the NEGATED form (ExprProcessor calls getNegative()).
+    // The original bytecode type is the negation of ifType.
+    this.originalBytecodeType = (ifType != Type.VALUE) ? ifType.getNegative() : null;
 
     if (ifType.ordinal() <= Type.LE.ordinal()) {
       stack.push(new ConstExprent(0, true, null));
@@ -66,6 +74,10 @@ public class IfExprent extends Exprent {
     }
 
     condition = ifType.functionType == null ? stack.pop() : new FunctionExprent(ifType.functionType, stack, bytecodeOffsets);
+  }
+
+  public Type getOriginalBytecodeType() {
+    return originalBytecodeType;
   }
 
   private IfExprent(Exprent condition, BitSet bytecodeOffsets) {
