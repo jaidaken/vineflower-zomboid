@@ -597,36 +597,25 @@ public class MethodProcessor implements Runnable {
   private static void fixGuardClauseInversions(Statement stat) {
     if (stat instanceof IfStatement) {
       IfStatement ifStat = (IfStatement) stat;
+      // Only handle IFTYPE_IFELSE with simple direct comparisons where
+      // we can safely swap bodies. More complex cases (IFTYPE_IF, compound
+      // conditions) require constructor-level changes that are too risky.
       if (ifStat.iftype == IfStatement.IFTYPE_IFELSE && ifStat.getHeadexprent() instanceof IfExprent) {
         IfExprent ifExpr = (IfExprent) ifStat.getHeadexprent();
         IfExprent.Type origType = ifExpr.getOriginalBytecodeType();
-        if (origType != null) {
-          // Check if the current condition matches the original bytecode direction.
-          // The condition at this point has been through initExprents (possibly negated).
-          // If negated=true was set during construction, the condition was double-negated
-          // back to the original. But the if/else bodies are swapped. We want to undo
-          // both: negate the condition AND swap the bodies.
+        if (origType != null && origType.getFunctionType() != null) {
           Exprent cond = ifExpr.getCondition();
-          // Detect if the current condition's top-level comparison matches the NEGATED
-          // bytecode type (meaning no double-negation happened = correct direction)
-          // or the ORIGINAL bytecode type (meaning double-negation happened = inverted)
+          // Only handle simple comparisons (EQ, NE, LT, GE, GT, LE, etc.)
+          // where the condition's FunctionType directly matches the original bytecode
           if (cond instanceof FunctionExprent) {
-            FunctionExprent func = (FunctionExprent) cond;
-            FunctionExprent.FunctionType condFunc = func.getFuncType();
-            // Check if condition matches the original bytecode type
-            // If so, initExprents double-negated and we should undo it
-            if (origType.getFunctionType() != null && condFunc == origType.getFunctionType()) {
-              // Condition matches original bytecode = was double-negated
-              // Swap if/else bodies and negate condition to restore
+            FunctionExprent.FunctionType condFunc = ((FunctionExprent) cond).getFuncType();
+            if (condFunc == origType.getFunctionType()) {
               Statement ifBody = ifStat.getIfstat();
               Statement elseBody = ifStat.getElsestat();
               if (ifBody != null && elseBody != null) {
-                // Swap the statement references
                 ifStat.setIfstat(elseBody);
                 ifStat.setElsestat(ifBody);
-                // Negate the condition
                 ifExpr.negateIf();
-                // Swap the edges too
                 StatEdge tmpEdge = ifStat.getIfEdge();
                 ifStat.setIfEdge(ifStat.getElseEdge());
                 ifStat.setElseEdge(tmpEdge);
@@ -636,7 +625,6 @@ public class MethodProcessor implements Runnable {
         }
       }
     }
-    // Recurse into children
     for (Statement child : stat.getStats()) {
       fixGuardClauseInversions(child);
     }
