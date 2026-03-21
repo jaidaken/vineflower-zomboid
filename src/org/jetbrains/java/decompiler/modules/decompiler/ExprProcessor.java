@@ -1041,7 +1041,124 @@ public class ExprProcessor implements CodeConstants {
       }
     }
 
-    boolean cast = castAlways || doCast || doCastNull || doCastNarrowing || doCastGenerics || doCastRtfNarrowing;
+    // RTF: when leftType is a GENVAR (T, V, R) or a concrete type (ArrayList)
+    // but the expression's actual type (from descriptor/erased type) is Object,
+    // force a cast. getInferredExprType resolves the type variable or matches the
+    // upper bound, hiding the Object→T or Object→ArrayList gap javac would reject.
+    boolean doCastRtfGenvar = false;
+    if (DecompilerContext.isRoundtripFidelity()) {
+      VarType actualType = exprent.getExprType();
+      if (actualType.type == CodeType.OBJECT && "java/lang/Object".equals(actualType.value)) {
+        if (leftType.type == CodeType.GENVAR) {
+          doCastRtfGenvar = true;
+        } else if (leftType.type == CodeType.OBJECT && !"java/lang/Object".equals(leftType.value)
+            && !doCast && exprent instanceof VarExprent) {
+          // Concrete type LHS with Object actual (from erased method param)
+          // Only for VarExprent to avoid false positives on complex expressions
+          doCastRtfGenvar = true;
+        }
+      }
+    }
+    // RTF: generic invariance — same base class but different type args.
+    // E.g., Pool<IPooledObject> param receiving Pool<PO> argument.
+    // Triggers when both are GenericType with different args, OR when leftType
+    // is raw but rightType is GenericType with GENVAR args (the rendered output
+    // will have generic types from signatures causing invariance errors).
+    boolean doCastRtfInvariance = false;
+    if (DecompilerContext.isRoundtripFidelity() && !doCast && !doCastRtfGenvar) {
+      if (leftType instanceof GenericType && rightType instanceof GenericType
+          && leftType.value != null && leftType.value.equals(rightType.value)) {
+        // VarType.equals ignores generic arguments, so compare them explicitly
+        GenericType lg = (GenericType) leftType;
+        GenericType rg = (GenericType) rightType;
+        if (!lg.getArguments().equals(rg.getArguments())) {
+          // Only for GENVAR arguments from the CURRENT class/method scope
+          // Don't trigger for concrete→concrete or out-of-scope GENVARs
+          boolean rightHasLocalGenvar = false;
+          for (VarType arg : rg.getArguments()) {
+            if (arg.type == CodeType.GENVAR) {
+              // Verify GENVAR is in current scope
+              boolean inScope = false;
+              org.jetbrains.java.decompiler.main.rels.MethodWrapper mw =
+                  DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+              if (mw != null && mw.methodStruct.getSignature() != null) {
+                for (String tp : mw.methodStruct.getSignature().typeParameters) {
+                  if (arg.value.equals(tp)) { inScope = true; break; }
+                }
+              }
+              if (!inScope) {
+                org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode cls =
+                    DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+                while (cls != null && !inScope) {
+                  if (cls.classStruct.getSignature() != null) {
+                    for (String tp : cls.classStruct.getSignature().fparameters) {
+                      if (arg.value.equals(tp)) { inScope = true; break; }
+                    }
+                  }
+                  cls = cls.parent;
+                }
+              }
+              if (inScope) { rightHasLocalGenvar = true; break; }
+            }
+          }
+          if (rightHasLocalGenvar) {
+            doCastRtfInvariance = true;
+          }
+        }
+      }
+      // When leftType is raw but rightType is GenericType with GENVAR args
+      // (from class signature), the rendered code will show the generic types
+      // and javac will reject due to invariance
+      if (!doCastRtfInvariance && !(leftType instanceof GenericType)
+          && rightType instanceof GenericType
+          && leftType.value != null && leftType.value.equals(rightType.value)
+          && !leftType.equals(rightType)) {
+        // Check if rightType has GENVAR arguments
+        boolean hasGenvar = false;
+        for (VarType arg : ((GenericType)rightType).getArguments()) {
+          if (arg.type == CodeType.GENVAR) { hasGenvar = true; break; }
+        }
+        if (hasGenvar) {
+          doCastRtfInvariance = true;
+        }
+      }
+    }
+    if (doCastRtfInvariance) {
+      // Use raw type (strip generic args) for the cast
+      leftType = new VarType(CodeType.OBJECT, leftType.arrayDim, leftType.value);
+    }
+
+    boolean cast = castAlways || doCast || doCastNull || doCastNarrowing || doCastGenerics || doCastRtfNarrowing || doCastRtfGenvar || doCastRtfInvariance;
+
+    // RTF: validate GENVAR cast targets are in scope. If casting to a type variable
+    // from a different class (e.g., ReturnValueContainer's T, Function's T) that's
+    // not declared by the current method, class, or enclosing classes, skip the cast.
+    if (cast && DecompilerContext.isRoundtripFidelity() && leftType.type == CodeType.GENVAR) {
+      boolean inScope = false;
+      org.jetbrains.java.decompiler.main.rels.MethodWrapper mw =
+          DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+      if (mw != null && mw.methodStruct.getSignature() != null) {
+        for (String tp : mw.methodStruct.getSignature().typeParameters) {
+          if (leftType.value.equals(tp)) { inScope = true; break; }
+        }
+      }
+      if (!inScope) {
+        // Walk up the class hierarchy (current class + enclosing classes)
+        org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode cls =
+            DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+        while (cls != null && !inScope) {
+          if (cls.classStruct.getSignature() != null) {
+            for (String tp : cls.classStruct.getSignature().fparameters) {
+              if (leftType.value.equals(tp)) { inScope = true; break; }
+            }
+          }
+          cls = cls.parent;
+        }
+      }
+      if (!inScope) {
+        cast = false;
+      }
+    }
 
     if (castNull == NullCastType.DONT_CAST_AT_ALL && rightType.type == CodeType.NULL) {
       cast = castAlways;

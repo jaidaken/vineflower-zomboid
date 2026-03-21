@@ -81,6 +81,19 @@ public class ExitExprent extends Exprent {
         if (methodDescriptor != null && methodDescriptor.genericInfo != null && methodDescriptor.genericInfo.returnType != null) {
           ret = methodDescriptor.genericInfo.returnType;
         }
+        // RTF: when methodDescriptor.genericInfo is null (e.g., param count mismatch
+        // caused MethodDescriptor to discard the signature), look up the StructMethod's
+        // signature directly for the generic return type.
+        if (DecompilerContext.isRoundtripFidelity() && ret.equals(retType) && ret.type == CodeType.OBJECT) {
+          MethodWrapper mw = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+          if (mw != null && mw.methodStruct.getSignature() != null
+              && mw.methodStruct.getSignature().returnType != null) {
+            VarType sigRet = mw.methodStruct.getSignature().returnType;
+            if (sigRet.type == CodeType.GENVAR) {
+              ret = sigRet;
+            }
+          }
+        }
         buf.append(' ');
 
         ExprProcessor.getCastedExprent(value, ret, buf, indent, ExprProcessor.NullCastType.DONT_CAST_AT_ALL, false, false, false);
@@ -88,38 +101,72 @@ public class ExitExprent extends Exprent {
         // RTF: same as assignment-level cast — when the return expression
         // is an InvocationExprent returning a wider type than the method's
         // return type, getCastedExprent may not add a cast. Check descriptor.
-        if (DecompilerContext.isRoundtripFidelity() && value instanceof InvocationExprent) {
-          InvocationExprent valInv = (InvocationExprent) value;
-          String desc = valInv.getStringDescriptor();
-          VarType descRet = valInv.getDescriptor().ret;
-          if (desc != null && descRet != null && !descRet.equals(ret)
-              && ret.type != CodeType.NULL && ret.type != CodeType.UNKNOWN
-              && !valInv.isUnboxingCall() && !valInv.isBoxingCall()) {
-            boolean needsCast = descRet.equals(VarType.VARTYPE_OBJECT)
-                || (descRet.type == CodeType.OBJECT && ret.type == CodeType.OBJECT
-                    && !"java/lang/Object".equals(ret.value)
-                    && DecompilerContext.getStructContext() != null
-                    && DecompilerContext.getStructContext().instanceOf(ret.value, descRet.value));
-            // Also cast when return type is GENVAR (T) and descriptor returns Object
-            if (!needsCast && ret.type == CodeType.GENVAR
-                && descRet.type == CodeType.OBJECT) {
-              needsCast = true;
+        if (DecompilerContext.isRoundtripFidelity()) {
+          // Unwrap unboxing calls and casts to find the underlying invocation
+          Exprent rawValue = value;
+          while (rawValue instanceof FunctionExprent
+              && ((FunctionExprent)rawValue).getFuncType() == FunctionExprent.FunctionType.CAST) {
+            rawValue = ((FunctionExprent)rawValue).getLstOperands().get(0);
+          }
+          if (rawValue instanceof InvocationExprent && ((InvocationExprent)rawValue).isUnboxingCall()) {
+            Exprent inst = ((InvocationExprent)rawValue).getInstance();
+            if (inst != null) {
+              while (inst instanceof FunctionExprent
+                  && ((FunctionExprent)inst).getFuncType() == FunctionExprent.FunctionType.CAST) {
+                inst = ((FunctionExprent)inst).getLstOperands().get(0);
+              }
+              if (inst instanceof InvocationExprent) {
+                rawValue = inst;
+              }
             }
-            if (needsCast) {
-              String rendered = buf.toString();
-              int retIdx = rendered.indexOf("return ") + 7;
-              if (retIdx > 7) {
-                String afterReturn = rendered.substring(retIdx).trim();
-                if (!afterReturn.startsWith("(")) {
-                  VarType castType = ret;
-                  if (castType.type != CodeType.OBJECT && castType.type != CodeType.GENVAR) {
-                    // Primitive return — cast to boxed type
-                    for (java.util.Map.Entry<VarType, VarType> e : VarType.UNBOXING_TYPES.entrySet()) {
-                      if (e.getValue().equals(castType)) { castType = e.getKey(); break; }
-                    }
+          }
+          boolean needsReturnCast = false;
+          if (rawValue instanceof InvocationExprent) {
+            InvocationExprent valInv = (InvocationExprent) rawValue;
+            String desc = valInv.getStringDescriptor();
+            VarType descRet = valInv.getDescriptor().ret;
+            if (desc != null && descRet != null && !descRet.equals(ret)
+                && ret.type != CodeType.NULL && ret.type != CodeType.UNKNOWN
+                && !valInv.isUnboxingCall() && !valInv.isBoxingCall()) {
+              needsReturnCast = descRet.equals(VarType.VARTYPE_OBJECT)
+                  || (descRet.type == CodeType.OBJECT && ret.type == CodeType.OBJECT
+                      && !"java/lang/Object".equals(ret.value)
+                      && DecompilerContext.getStructContext() != null
+                      && DecompilerContext.getStructContext().instanceOf(ret.value, descRet.value));
+              // Also cast when return type is GENVAR (T) and descriptor returns Object
+              if (!needsReturnCast && ret.type == CodeType.GENVAR
+                  && descRet.type == CodeType.OBJECT) {
+                needsReturnCast = true;
+              }
+            }
+          }
+          // Also check: method returns GENVAR (T, V) but expression type is Object
+          // Covers ternary, field access, and other non-invocation expressions
+          if (!needsReturnCast && ret.type == CodeType.GENVAR) {
+            VarType exprType = value.getExprType();
+            if (exprType.type == CodeType.OBJECT && "java/lang/Object".equals(exprType.value)) {
+              needsReturnCast = true;
+            }
+          }
+          if (needsReturnCast) {
+            String rendered = buf.toString();
+            int retIdx = rendered.indexOf("return ") + 7;
+            if (retIdx >= 7) {
+              String afterReturn = rendered.substring(retIdx).trim();
+              if (!afterReturn.startsWith("(")) {
+                VarType castType = ret;
+                if (castType.type != CodeType.OBJECT && castType.type != CodeType.GENVAR) {
+                  // Primitive return — cast to boxed type
+                  for (java.util.Map.Entry<VarType, VarType> e : VarType.UNBOXING_TYPES.entrySet()) {
+                    if (e.getValue().equals(castType)) { castType = e.getKey(); break; }
                   }
-                  buf.setLength(retIdx);
-                  buf.append("(").appendCastTypeName(castType).append(")");
+                }
+                buf.setLength(retIdx);
+                buf.append("(").appendCastTypeName(castType).append(")");
+                // Wrap low-precedence expressions (ternary, assignment) in parens
+                if (value.getPrecedence() >= FunctionExprent.FunctionType.CAST.precedence) {
+                  buf.append("(").append(value.toJava(indent)).append(")");
+                } else {
                   buf.append(value.toJava(indent));
                 }
               }

@@ -3,8 +3,10 @@
  */
 package org.jetbrains.java.decompiler.modules.decompiler.exps;
 
+import org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.plugins.PluginImplementationException;
+import org.jetbrains.java.decompiler.main.rels.MethodWrapper;
 import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.sforms.SFormsConstructor;
 import org.jetbrains.java.decompiler.modules.decompiler.sforms.VarMapHolder;
@@ -488,12 +490,27 @@ public class FunctionExprent extends Exprent {
    * whose descriptor returns Object but the operand's VF type is a primitive,
    * wrap the rendered operand with a cast to the primitive type.
    */
-  private static TextBuffer rtfCastObjectOperand(Exprent operand, TextBuffer rendered) {
-    // Unwrap casts to find the underlying invocation
+  private static TextBuffer rtfCastObjectOperand(Exprent operand, TextBuffer rendered, VarType otherType) {
+    // Unwrap casts and unboxing calls to find the underlying invocation
     Exprent inner = operand;
     while (inner instanceof FunctionExprent
         && ((FunctionExprent) inner).getFuncType() == FunctionType.CAST) {
       inner = ((FunctionExprent) inner).getLstOperands().get(0);
+    }
+    // Unwrap unboxing calls (e.g., intValue(), booleanValue()) to find
+    // the underlying method call whose descriptor returns Object
+    if (inner instanceof InvocationExprent && ((InvocationExprent) inner).isUnboxingCall()) {
+      Exprent inst = ((InvocationExprent) inner).getInstance();
+      if (inst != null) {
+        // Unwrap casts on the instance too
+        while (inst instanceof FunctionExprent
+            && ((FunctionExprent) inst).getFuncType() == FunctionType.CAST) {
+          inst = ((FunctionExprent) inst).getLstOperands().get(0);
+        }
+        if (inst instanceof InvocationExprent) {
+          inner = inst;
+        }
+      }
     }
     if (inner instanceof InvocationExprent) {
       String desc = ((InvocationExprent) inner).getStringDescriptor();
@@ -512,9 +529,14 @@ public class FunctionExprent extends Exprent {
           if (inferredType != null && inferredType.type != CodeType.NULL
               && inferredType.type != CodeType.UNKNOWN
               && !"java/lang/Object".equals(inferredType.value)) {
-            // For boxed types (Integer, Long), cast to the boxed type —
-            // javac will auto-unbox for arithmetic
+            // For boxed types (Integer, Long), cast to the boxed type
             return rendered.enclose("(" + ExprProcessor.getCastTypeName(inferredType) + ")", "");
+          }
+          // Fallback: use the other operand's type to determine the cast.
+          // For int + Object, cast Object to (int); for Object + long, cast to (long).
+          if (otherType != null && otherType.type != CodeType.OBJECT
+              && otherType.type != CodeType.NULL && otherType.type != CodeType.UNKNOWN) {
+            return rendered.enclose("(" + ExprProcessor.getCastTypeName(otherType) + ")", "");
           }
         }
       }
@@ -576,8 +598,8 @@ public class FunctionExprent extends Exprent {
       // descriptor) but VF narrowed it to a primitive, the rendered Java has
       // Object in an arithmetic context. Insert a cast to the primitive type.
       if (DecompilerContext.isRoundtripFidelity()) {
-        leftOperand = rtfCastObjectOperand(left, leftOperand);
-        rightOperand = rtfCastObjectOperand(right, rightOperand);
+        leftOperand = rtfCastObjectOperand(left, leftOperand, right.getExprType());
+        rightOperand = rtfCastObjectOperand(right, rightOperand, left.getExprType());
       }
 
       // Check for special cased integers on the right and left hand side, and then return if they are found.
@@ -635,8 +657,8 @@ public class FunctionExprent extends Exprent {
       TextBuffer leftOp = wrapOperandString(left, false, indent, true);
       TextBuffer rightOp = wrapOperandString(right, true, indent, true);
       if (DecompilerContext.isRoundtripFidelity()) {
-        leftOp = rtfCastObjectOperand(left, leftOp);
-        rightOp = rtfCastObjectOperand(right, rightOp);
+        leftOp = rtfCastObjectOperand(left, leftOp, right.getExprType());
+        rightOp = rtfCastObjectOperand(right, rightOp, left.getExprType());
       }
       if (!disableNewlineGroupCreation) {
         buf.pushNewlineGroup(indent, 1);

@@ -719,6 +719,42 @@ public final class LabelHelper {
     Set<Statement> treeStatements = new HashSet<>();
     collectStatements(stat, treeStatements);
     repairOrphanedLabelsRec(stat, treeStatements);
+    // RTF: relocate labels on if-statements when the break source is a sibling,
+    // not a child. Move the label to the parent statement.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      relocateMisplacedLabels(stat);
+    }
+  }
+
+  private static void relocateMisplacedLabels(Statement stat) {
+    // Check each statement's labelEdges
+    for (StatEdge edge : new ArrayList<>(stat.getLabelEdges())) {
+      if (!edge.labeled || !edge.explicit) continue;
+      // Check if the break source is a descendant of this statement
+      Statement source = edge.getSource();
+      if (source != null && !isDescendant(stat, source)) {
+        // Source is NOT inside this statement — label is misplaced.
+        // Move to parent statement.
+        Statement parent = stat.getParent();
+        if (parent != null) {
+          stat.getLabelEdges().remove(edge);
+          parent.getLabelEdges().add(edge);
+          edge.closure = parent;
+        }
+      }
+    }
+    for (Statement st : stat.getStats()) {
+      relocateMisplacedLabels(st);
+    }
+  }
+
+  private static boolean isDescendant(Statement ancestor, Statement descendant) {
+    Statement current = descendant;
+    while (current != null) {
+      if (current == ancestor) return true;
+      current = current.getParent();
+    }
+    return false;
   }
 
   private static void collectStatements(Statement stat, Set<Statement> set) {

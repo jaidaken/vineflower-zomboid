@@ -721,6 +721,11 @@ public class ClassesProcessor implements CodeConstants {
 
       public boolean is_method_reference;
       public boolean is_content_method_static;
+
+      // RTF: SAM descriptor from bootstrap arg[0]. When this differs from
+      // method_descriptor (arg[2]), the collection is raw and lambda params
+      // should NOT get explicit types.
+      public String sam_method_descriptor;
     }
   }
 }

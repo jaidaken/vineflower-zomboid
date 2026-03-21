@@ -254,6 +254,19 @@ public class AssignmentExprent extends Exprent {
                 && ((FunctionExprent)rawRight).getFuncType() == FunctionExprent.FunctionType.CAST) {
               rawRight = ((FunctionExprent)rawRight).getLstOperands().get(0);
             }
+            // Unwrap unboxing calls (e.g., intValue()) to find the underlying method
+            if (rawRight instanceof InvocationExprent && ((InvocationExprent)rawRight).isUnboxingCall()) {
+              Exprent inst = ((InvocationExprent)rawRight).getInstance();
+              if (inst != null) {
+                while (inst instanceof FunctionExprent
+                    && ((FunctionExprent)inst).getFuncType() == FunctionExprent.FunctionType.CAST) {
+                  inst = ((FunctionExprent)inst).getLstOperands().get(0);
+                }
+                if (inst instanceof InvocationExprent) {
+                  rawRight = inst;
+                }
+              }
+            }
             if (rawRight instanceof InvocationExprent) {
               InvocationExprent rightInv = (InvocationExprent) rawRight;
               String desc = rightInv.getStringDescriptor();

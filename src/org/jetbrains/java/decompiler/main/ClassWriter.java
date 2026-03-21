@@ -236,18 +236,35 @@ public class ClassWriter implements StatementWriter {
             }
           }
           if (!written) {
-            // Check if any lambda param will get an explicit type (needs parentheses)
+            // RTF: Check if ALL lambda params qualify for explicit types.
+            // Java requires all-or-nothing — can't mix typed and untyped params.
             boolean hasExplicitTypes = false;
             if (DecompilerContext.isRoundtripFidelity()) {
               int tmpStart = md_content.params.length - md_lambda.params.length;
+              MethodDescriptor md_sam_check = node.lambdaInformation.sam_method_descriptor != null
+                  ? MethodDescriptor.parseDescriptor(node.lambdaInformation.sam_method_descriptor)
+                  : null;
+              boolean allParamsMatch = md_lambda.params.length > 0;
               for (int ti = tmpStart; ti < md_content.params.length; ti++) {
                 int lpi = ti - tmpStart;
                 VarType lt = lpi < md_lambda.params.length ? md_lambda.params[lpi] : null;
                 if (lt != null && md_content.params[ti].equals(lt)) {
-                  hasExplicitTypes = true;
+                  // Check SAM — if SAM matches instantiated type (both Object), it's raw
+                  if (md_sam_check != null && lpi < md_sam_check.params.length) {
+                    VarType samType = md_sam_check.params[lpi];
+                    if (samType.equals(lt)) {
+                      // Raw context — this param would not get a type
+                      allParamsMatch = false;
+                      break;
+                    }
+                  }
+                } else {
+                  // Content type != lambda type — this param won't get an explicit type
+                  allParamsMatch = false;
                   break;
                 }
               }
+              hasExplicitTypes = allParamsMatch;
             }
             boolean lambdaParametersNeedParentheses = md_lambda.params.length != 1 || hasExplicitTypes;
   
@@ -266,34 +283,9 @@ public class ClassWriter implements StatementWriter {
                 }
                 VarType type = md_content.params[i];
 
-                // RTF: when a lambda parameter is typed as Object (from erased generic
-                // on raw collection), get the inferred type from VF's type processor.
-                // Emit explicit type annotation so javac accepts member access on the parameter.
-                boolean emitExplicitType = false;
+                // RTF: emit explicit type uses the all-or-nothing decision from pre-scan
+                boolean emitExplicitType = hasExplicitTypes;
                 VarType inferredType = type;
-                // RTF: check the FUNCTIONAL INTERFACE parameter type (md_lambda),
-                // not the content method parameter type (md_content).
-                // When the collection is raw, md_lambda has Object params but
-                // md_content has the specific types from the lambda body.
-                int lambdaParamIndex = i - start_index;
-                VarType lambdaType = lambdaParamIndex >= 0 && lambdaParamIndex < md_lambda.params.length
-                    ? md_lambda.params[lambdaParamIndex] : null;
-                // RTF: emit explicit lambda parameter types ONLY when the functional
-                // interface param matches the content method param. When the functional
-                // interface has Object (from raw collection) but content method has a
-                // specific type, the explicit type causes "incompatible parameter types".
-                // In that case, skip the type and let javac infer Object.
-                if (DecompilerContext.isRoundtripFidelity()) {
-                  int lpi = i - start_index;
-                  VarType lambdaParamType = lpi >= 0 && lpi < md_lambda.params.length
-                      ? md_lambda.params[lpi] : null;
-                  // Only emit type when: lambda interface param is NOT Object,
-                  // OR when content and lambda types match
-                  if (lambdaParamType != null && type.equals(lambdaParamType)) {
-                    inferredType = type;
-                    emitExplicitType = true;
-                  }
-                }
 
                 String clashingName = methodWrapper.varproc.getClashingName(new VarVersionPair(index, 0));
                 String parameterName = methodWrapper.varproc.getVarName(new VarVersionPair(index, 0));

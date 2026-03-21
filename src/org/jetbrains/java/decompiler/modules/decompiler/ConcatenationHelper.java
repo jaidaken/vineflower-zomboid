@@ -101,6 +101,9 @@ public final class ConcatenationHelper {
 
         if (parameters.size() >= 2) {
           return createConcatExprent(parameters, expr.bytecode);
+        } else if (parameters.size() == 1) {
+          // Single-arg makeConcatWithConstants: just return the arg itself
+          return parameters.get(0);
         }
       }
     }

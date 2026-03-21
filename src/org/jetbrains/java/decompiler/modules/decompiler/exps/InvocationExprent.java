@@ -1180,21 +1180,57 @@ public class InvocationExprent extends Exprent {
       }
 
       Set<VarType> namedGens = getNamedGenerics().keySet();
+      // For inner class constructors, the descriptor may include synthetic params
+      // (outer-ref) that aren't in the generic signature. Compute the offset
+      // between descriptor params and signature params to align correctly.
+      int sigParamOffset = 0;
+      if (functype == Type.INIT && desc.getSignature() != null
+          && types.length > desc.getSignature().parameterTypes.size()) {
+        sigParamOffset = types.length - desc.getSignature().parameterTypes.size();
+      }
       int y = 0;
       for (int x = start; x < types.length; x++) {
+        // Skip synthetic/outer-ref params that aren't in the signature
+        boolean skipForSignature = (sigParamOffset > 0 && x < sigParamOffset);
+        if (skipForSignature) continue;
         if (mask == null || mask.get(x) == null) {
           if (desc.getSignature().parameterTypes.size() <= y) {
             continue;
           }
 
-          VarType type = desc.getSignature().parameterTypes.get(y++).remap(hierarchyMap).remap(genericsMap);
+          VarType rawSigType = desc.getSignature().parameterTypes.get(y++);
+          VarType type = rawSigType.remap(hierarchyMap).remap(genericsMap);
+          // RTF: when remap resolves a GENVAR (TypeK, V) to Object, preserve
+          // the original GENVAR if it's declared by the current class/method.
+          // This ensures proper type variable rendering for casts and parameter types.
+          // Guard: only preserve when the GENVAR is in namedGens (current scope)
+          // AND it's NOT a type parameter declared by the CALLED method itself
+          // (which would leak internal type vars to the call site).
+          if (DecompilerContext.isRoundtripFidelity()
+              && rawSigType.type == CodeType.GENVAR
+              && type.type == CodeType.OBJECT && "java/lang/Object".equals(type.value)
+              && namedGens.contains(rawSigType)) {
+            // Check: is this GENVAR from the called method's own type params?
+            boolean isCalledMethodTypeParam = false;
+            if (desc != null && desc.getSignature() != null
+                && desc.getSignature().typeParameters != null) {
+              for (String tp : desc.getSignature().typeParameters) {
+                if (rawSigType.value.equals(tp)) {
+                  isCalledMethodTypeParam = true;
+                  break;
+                }
+              }
+            }
+            if (!isCalledMethodTypeParam) {
+              type = rawSigType;
+            }
+          }
           if (type != null && !(type.isGeneric() && ((GenericType)type).hasUnknownGenericType(namedGens))) {
             types[x] = type;
           }
         }
       }
     }
-
 
     TextBuffer buf = new TextBuffer();
 
@@ -1244,6 +1280,7 @@ public class InvocationExprent extends Exprent {
 
         // 'byte' and 'short' literals need an explicit narrowing type cast when used as a parameter
         ExprProcessor.getCastedExprent(lstParameters.get(i), types[i], buff, indent, ambiguous ? ExprProcessor.NullCastType.CAST : ExprProcessor.NullCastType.DONT_CAST_AT_ALL, ambiguous, true, true);
+
 
         // the last "new Object[0]" in the vararg call is not printed
         if (buff.length() > 0) {
@@ -1445,7 +1482,12 @@ public class InvocationExprent extends Exprent {
       for (int i = 0; i < left.length; i++) {
         TypeFamily leftFamily = left[i].typeFamily;
         TypeFamily rightFamily = right[i].typeFamily;
-        if (leftFamily != rightFamily && !(leftFamily.isNumeric() && rightFamily.isNumeric())) {
+        if (leftFamily != rightFamily
+            && !(leftFamily.isNumeric() && rightFamily.isNumeric())
+            // RTF: autoboxing compatibility — numeric types match Object (int↔Object)
+            && !(DecompilerContext.isRoundtripFidelity()
+                 && ((leftFamily == TypeFamily.OBJECT && rightFamily.isNumeric())
+                     || (rightFamily == TypeFamily.OBJECT && leftFamily.isNumeric())))) {
           return false;
         }
 
@@ -1488,6 +1530,61 @@ public class InvocationExprent extends Exprent {
     String pkg1 = class1.substring(0, pos1);
     String pkg2 = class2.substring(0, pos2);
     return pkg1.equals(pkg2);
+  }
+
+  /**
+   * Check if a primitive widening conversion exists from source to target.
+   * Java allows: byte→short→int→long→float→double, char→int, int→float, etc.
+   */
+  private static boolean isWideningConversion(VarType source, VarType target) {
+    if (source.type == target.type) return true;
+    // VF internal types: BYTECHAR (X) and SHORTCHAR (Y) are compatible with int, float, etc.
+    if (source.type == CodeType.BYTECHAR || source.type == CodeType.SHORTCHAR) {
+      return target.type == CodeType.INT || target.type == CodeType.LONG
+          || target.type == CodeType.FLOAT || target.type == CodeType.DOUBLE
+          || target.type == CodeType.SHORT || target.type == CodeType.CHAR
+          || target.type == CodeType.BYTE
+          || target.type == CodeType.BYTECHAR || target.type == CodeType.SHORTCHAR;
+    }
+    // int → long, float, double
+    if (source.type == CodeType.INT) {
+      return target.type == CodeType.LONG || target.type == CodeType.FLOAT || target.type == CodeType.DOUBLE;
+    }
+    // long → float, double
+    if (source.type == CodeType.LONG) {
+      return target.type == CodeType.FLOAT || target.type == CodeType.DOUBLE;
+    }
+    // float → double
+    if (source.type == CodeType.FLOAT) {
+      return target.type == CodeType.DOUBLE;
+    }
+    // byte → short, int, long, float, double
+    if (source.type == CodeType.BYTE) {
+      return target.type == CodeType.SHORT || target.type == CodeType.INT
+          || target.type == CodeType.LONG || target.type == CodeType.FLOAT || target.type == CodeType.DOUBLE;
+    }
+    // short → int, long, float, double
+    if (source.type == CodeType.SHORT) {
+      return target.type == CodeType.INT || target.type == CodeType.LONG
+          || target.type == CodeType.FLOAT || target.type == CodeType.DOUBLE;
+    }
+    // char → int, long, float, double
+    if (source.type == CodeType.CHAR) {
+      return target.type == CodeType.INT || target.type == CodeType.LONG
+          || target.type == CodeType.FLOAT || target.type == CodeType.DOUBLE;
+    }
+    // Autoboxing: primitive → Object (via boxing)
+    if (target.type == CodeType.OBJECT && source.typeFamily.isNumeric()) {
+      // Any primitive can autobox to Object or its wrapper type
+      return "java/lang/Object".equals(target.value)
+          || VarType.UNBOXING_TYPES.containsKey(target);
+    }
+    // Object subtype check (for reference widening)
+    if (source.type == CodeType.OBJECT && target.type == CodeType.OBJECT) {
+      return DecompilerContext.getStructContext() != null
+          && DecompilerContext.getStructContext().instanceOf(source.value, target.value);
+    }
+    return false;
   }
 
   private BitSet getAmbiguousParameters(List<StructMethod> matches) {
@@ -1535,7 +1632,31 @@ public class InvocationExprent extends Exprent {
             missed.set(i);
           }
         }
-        if (exact) return EMPTY_BIT_SET;
+        if (exact && matches.size() <= 1) return EMPTY_BIT_SET;
+        // Even if exact, check if other methods also match via widening
+        // conversions (e.g., int→float). If so, the call is still ambiguous.
+        if (exact) {
+          boolean otherMatch = false;
+          for (StructMethod mtt : matches) {
+            if (mtt.getDescriptor().equals(stringDescriptor)) continue;
+            MethodDescriptor md2 = MethodDescriptor.parseDescriptor(mtt.getDescriptor());
+            if (md2.params.length != lstParameters.size()) continue;
+            boolean allMatch = true;
+            for (int j = 0; j < md2.params.length; j++) {
+              VarType ptype = lstParameters.get(j).getExprType();
+              if (!md2.params[j].equals(ptype)
+                  && !isWideningConversion(ptype, md2.params[j])
+                  && !(md2.params[j].type == CodeType.OBJECT && ptype.type == CodeType.OBJECT
+                       && DecompilerContext.getStructContext().instanceOf(ptype.value, md2.params[j].value))) {
+                allMatch = false;
+                break;
+              }
+            }
+            if (allMatch) { otherMatch = true; break; }
+          }
+          if (!otherMatch) return EMPTY_BIT_SET;
+          // Fall through to mark ambiguous params
+        }
       }
     }
 
@@ -1546,8 +1667,14 @@ public class InvocationExprent extends Exprent {
       for (int i = 0; i < lstParameters.size(); i++) {
         Exprent exp = lstParameters.get(i);
         VarType ptype = exp.getExprType();
+        // Method references can adapt to multiple functional interfaces
+        // Skip strict type checking for them to allow ambiguity detection
+        if (exp instanceof NewExprent && ((NewExprent)exp).isLambda()
+            && ((NewExprent)exp).isMethodReference()) {
+          continue; // always consider method references as matching
+        }
         if (!missed.get(i)) {
-          if (!md.params[i].equals(ptype)) {
+          if (!md.params[i].equals(ptype) && !isWideningConversion(ptype, md.params[i])) {
             failed = true;
             break;
           }
@@ -1566,11 +1693,19 @@ public class InvocationExprent extends Exprent {
           }
           if (md.params[i].type == CodeType.OBJECT) {
             if (ptype.type != CodeType.NULL) {
-              if (!DecompilerContext.getStructContext().instanceOf(ptype.value, md.params[i].value)) {
+              // For primitive ptype → Object param: autoboxing makes it compatible
+              if (ptype.typeFamily.isNumeric() || ptype.type == CodeType.BOOLEAN) {
+                // primitives can autobox to Object or their wrapper — compatible
+              } else if (!DecompilerContext.getStructContext().instanceOf(ptype.value, md.params[i].value)) {
                 failed = true;
                 break;
               }
             }
+          }
+          // Also handle: missed param where candidate has primitive but ptype is different primitive
+          // (widening conversion in missed context)
+          else if (md.params[i].typeFamily.isNumeric() && ptype.typeFamily.isNumeric()) {
+            // Both numeric — compatible via widening
           }
         }
       }
@@ -1592,7 +1727,12 @@ public class InvocationExprent extends Exprent {
         GenericMethodDescriptor gen = mtt.getSignature(); //TODO: Find synthetic flags for params, as Enum generic signatures do no contain the String,int params
         if (gen != null && gen.parameterTypes.size() > i && gen.parameterTypes.get(i).isGeneric()) {
           Exprent exp = lstParameters.get(i);
-          if (!(exp instanceof NewExprent) || !((NewExprent)exp).isLambda() || ((NewExprent)exp).isMethodReference()) {
+          // For method references, don't skip — they can match multiple functional
+          // interfaces and need ambiguity detection
+          if (exp instanceof NewExprent && ((NewExprent)exp).isLambda()
+              && ((NewExprent)exp).isMethodReference()) {
+            // Fall through to check param type difference
+          } else if (!(exp instanceof NewExprent) || !((NewExprent)exp).isLambda()) {
             break;
           }
         }

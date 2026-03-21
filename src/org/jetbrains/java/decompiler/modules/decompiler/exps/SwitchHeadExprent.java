@@ -3,9 +3,11 @@
  */
 package org.jetbrains.java.decompiler.modules.decompiler.exps;
 
+import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.CheckTypesResult;
+import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
@@ -94,7 +96,36 @@ public class SwitchHeadExprent extends Exprent {
 
   @Override
   public TextBuffer toJava(int indent) {
-    TextBuffer valBuf = value.toJava(indent);
+    // RTF: strip unnecessary (int) casts on switch selectors.
+    // VF adds CAST(int) for tableswitch/lookupswitch, but this is invalid for:
+    // 1. Enum values (enums are valid switch selectors)
+    // 2. Expressions already returning int (the cast is redundant and breaks
+    //    assignment expressions like: (int)x = read() → ((int)x) = read())
+    Exprent renderValue = value;
+    if (DecompilerContext.isRoundtripFidelity() && value instanceof FunctionExprent) {
+      FunctionExprent func = (FunctionExprent) value;
+      if (func.getFuncType() == FunctionExprent.FunctionType.CAST
+          && func.getLstOperands().size() == 2) {
+        Exprent inner = func.getLstOperands().get(0);
+        VarType innerType = inner.getExprType();
+        boolean stripCast = false;
+        // Strip for enum types
+        if (innerType.type == CodeType.OBJECT) {
+          StructClass innerClass = DecompilerContext.getStructContext().getClass(innerType.value);
+          if (innerClass != null && innerClass.hasModifier(CodeConstants.ACC_ENUM)) {
+            stripCast = true;
+          }
+        }
+        // Strip for integer types (redundant cast that breaks assignments)
+        if (innerType.typeFamily == TypeFamily.INTEGER) {
+          stripCast = true;
+        }
+        if (stripCast) {
+          renderValue = inner;
+        }
+      }
+    }
+    TextBuffer valBuf = renderValue.toJava(indent);
     // RTF: when the switch selector would be Object at compile time (from erased
     // generics on raw collections) but the switch uses LOOKUPSWITCH/TABLESWITCH
     // (which operates on int), insert an (int) cast.
@@ -122,6 +153,24 @@ public class SwitchHeadExprent extends Exprent {
         }
       }
       if (needsCast) {
+        // Don't cast enums to int — enums are valid switch selectors
+        VarType valType = value.getExprType();
+        if (valType.type == CodeType.OBJECT) {
+          StructClass valClass = DecompilerContext.getStructContext().getClass(valType.value);
+          if (valClass != null && valClass.hasModifier(CodeConstants.ACC_ENUM)) {
+            needsCast = false;
+          }
+        }
+        // Don't cast if the value is already an int/numeric type
+        if (needsCast && valType.typeFamily == TypeFamily.INTEGER) {
+          needsCast = false;
+        }
+      }
+      if (needsCast) {
+        // Wrap assignments in parens: (int)(x = read()) not (int)x = read()
+        if (value instanceof AssignmentExprent) {
+          valBuf = valBuf.encloseWithParens();
+        }
         valBuf = valBuf.enclose("(int)", "");
       }
     }

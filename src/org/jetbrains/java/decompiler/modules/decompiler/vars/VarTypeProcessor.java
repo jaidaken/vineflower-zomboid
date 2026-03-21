@@ -14,6 +14,7 @@ import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
+import org.jetbrains.java.decompiler.struct.gen.generics.GenericType;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -512,6 +513,121 @@ public class VarTypeProcessor {
     // Recurse into sub-expressions (for nested assignments in ternaries, etc.)
     for (Exprent sub : expr.getAllExprents()) {
       collectAssignmentTypesFromExpr(sub, minTypes, varAssignTypes);
+    }
+  }
+
+  /**
+   * RTF post-pass: upgrade raw collection variable types to generic types
+   * based on lambda parameter types from bootstrap args.
+   *
+   * When a raw collection (e.g., HashSet) is used with a typed lambda
+   * (e.g., forEach with IsoChunk parameter), the original code had generic
+   * types (HashSet&lt;IsoChunk&gt;) but VF can't recover them from LVT alone.
+   * This pass uses the lambda's SAM/instantiated descriptors to derive
+   * the generic type parameters and upgrade the variable's type.
+   */
+  public static void upgradeRawCollectionTypes(Statement root, VarProcessor varProc) {
+    Map<VarVersionPair, VarType> minTypes = varProc.getVarVersions().getTypeProcessor().getMapExprentMinTypes();
+    Map<Integer, GenericType> upgrades = new HashMap<>();
+    collectLambdaGenericTypes(root, minTypes, upgrades);
+
+    for (Map.Entry<Integer, GenericType> entry : upgrades.entrySet()) {
+      VarVersionPair pair = new VarVersionPair(entry.getKey(), 0);
+      minTypes.put(pair, entry.getValue());
+    }
+  }
+
+  private static void collectLambdaGenericTypes(Statement stat, Map<VarVersionPair, VarType> minTypes,
+                                                 Map<Integer, GenericType> upgrades) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        collectLambdaGenericTypesFromExpr(expr, minTypes, upgrades);
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      collectLambdaGenericTypesFromExpr(expr, minTypes, upgrades);
+    }
+    for (Statement st : stat.getStats()) {
+      collectLambdaGenericTypes(st, minTypes, upgrades);
+    }
+  }
+
+  private static void collectLambdaGenericTypesFromExpr(Exprent expr, Map<VarVersionPair, VarType> minTypes,
+                                                         Map<Integer, GenericType> upgrades) {
+    // Look for method calls with lambda arguments on raw collection variables
+    if (expr instanceof InvocationExprent) {
+      InvocationExprent invoc = (InvocationExprent) expr;
+      Exprent inst = invoc.getInstance();
+      if (inst instanceof VarExprent) {
+        VarExprent var = (VarExprent) inst;
+        VarVersionPair pair = new VarVersionPair(var.getIndex(), 0);
+        VarType currentType = minTypes.get(pair);
+        // Only upgrade raw (non-generic) collection types
+        if (currentType != null && currentType.type == CodeType.OBJECT
+            && !(currentType instanceof GenericType)) {
+          for (Exprent param : invoc.getLstParameters()) {
+            checkLambdaParam(param, var.getIndex(), currentType, upgrades);
+          }
+        }
+      }
+    }
+    // Recurse into sub-expressions
+    for (Exprent sub : expr.getAllExprents()) {
+      collectLambdaGenericTypesFromExpr(sub, minTypes, upgrades);
+    }
+  }
+
+  private static void checkLambdaParam(Exprent param, int varIndex, VarType collectionType,
+                                         Map<Integer, GenericType> upgrades) {
+    if (!(param instanceof NewExprent) || !((NewExprent) param).isLambda()) {
+      return;
+    }
+    ClassNode lambdaNode = DecompilerContext.getClassProcessor()
+        .getMapRootClasses().get(((NewExprent) param).getNewType().value);
+    if (lambdaNode == null || lambdaNode.lambdaInformation == null
+        || lambdaNode.lambdaInformation.sam_method_descriptor == null) {
+      return;
+    }
+    MethodDescriptor mdSam = MethodDescriptor.parseDescriptor(
+        lambdaNode.lambdaInformation.sam_method_descriptor);
+    MethodDescriptor mdInst = MethodDescriptor.parseDescriptor(
+        lambdaNode.lambdaInformation.method_descriptor);
+
+    // Collect specific types from lambda params where SAM has Object
+    // but instantiated has specific type (generic-dependent params)
+    List<VarType> genericArgs = new ArrayList<>();
+    Set<String> seen = new java.util.LinkedHashSet<>();
+    boolean hasGenericParam = false;
+    for (int i = 0; i < mdInst.params.length && i < mdSam.params.length; i++) {
+      if ("java/lang/Object".equals(mdSam.params[i].value)
+          && mdInst.params[i].type == CodeType.OBJECT
+          && !"java/lang/Object".equals(mdInst.params[i].value)) {
+        hasGenericParam = true;
+        String argValue = mdInst.params[i].value;
+        if (seen.add(argValue)) {
+          genericArgs.add(mdInst.params[i]);
+        }
+      }
+    }
+
+    if (hasGenericParam && !genericArgs.isEmpty()) {
+      // Verify the collection class actually has generic type parameters
+      StructClass collCls = DecompilerContext.getStructContext().getClass(collectionType.value);
+      if (collCls == null || collCls.getSignature() == null
+          || collCls.getSignature().fparameters.isEmpty()) {
+        return; // class has no type parameters — can't add generic args
+      }
+      // Don't add more generic args than the class has type parameters
+      int maxArgs = collCls.getSignature().fparameters.size();
+      if (genericArgs.size() > maxArgs) {
+        genericArgs = genericArgs.subList(0, maxArgs);
+      }
+      // Don't override if already upgraded with a different type
+      if (!upgrades.containsKey(varIndex)) {
+        GenericType gt = new GenericType(CodeType.OBJECT, 0,
+            collectionType.value, null, genericArgs, GenericType.WILDCARD_NO);
+        upgrades.put(varIndex, gt);
+      }
     }
   }
 }

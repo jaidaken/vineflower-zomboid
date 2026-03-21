@@ -82,13 +82,15 @@ public class LambdaProcessor {
 
               String lambda_class_name = md.ret.value;
               String lambda_method_name = invoke_dynamic.elementname;
-              String lambda_method_descriptor = ((PrimitiveConstant)bootstrap_arguments.get(2)).getString(); // method type
+              String lambda_method_descriptor = ((PrimitiveConstant)bootstrap_arguments.get(2)).getString(); // instantiated method type
+              String sam_method_descriptor = ((PrimitiveConstant)bootstrap_arguments.get(0)).getString(); // SAM method type
 
               LinkConstant content_method_handle = (LinkConstant)bootstrap_arguments.get(1);
 
               ClassNode node_lambda = new ClassNode(content_method_handle.classname, content_method_handle.elementname,
                                                     content_method_handle.descriptor, content_method_handle.index1,
                                                     lambda_class_name, lambda_method_name, lambda_method_descriptor, cl);
+              node_lambda.lambdaInformation.sam_method_descriptor = sam_method_descriptor;
               node_lambda.simpleName = cl.qualifiedName + "##Lambda_" + invoke_dynamic.index1 + "_" + invoke_dynamic.index2;
               node_lambda.enclosingMethod = InterpreterUtil.makeUniqueKey(mt.getName(), mt.getDescriptor());
 

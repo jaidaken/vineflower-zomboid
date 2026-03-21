@@ -90,10 +90,88 @@ public class VarExprent extends Exprent implements Pattern {
         ex.printStackTrace();
       }
     }
-    else if (lvt != null) {
+    // RTF: prefer lambda-inferred GenericType over raw LVT type.
+    // When upgradeRawCollectionTypes sets a GenericType in the type processor,
+    // use it for the variable declaration (e.g., HashSet<IsoChunk> instead of raw HashSet).
+    if (DecompilerContext.isRoundtripFidelity() && processor != null) {
+      VarType procType = processor.getVarType(getVarVersionPair());
+      if (procType instanceof GenericType) {
+        return procType;
+      }
+    }
+    // RTF: for method parameters, retrieve the generic type from the method's
+    // Signature attribute. This propagates GENVAR types (R[], T[], Pool<PO>)
+    // through the expression tree, enabling proper cast generation.
+    // Without this, method param types are erased (Object[], Pool) from LVT.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      VarType sigType = getMethodParamGenericType();
+      if (sigType != null) {
+        return sigType;
+      }
+    }
+    if (lvt != null) {
       return lvt.getVarType();
     }
     return getVarType();
+  }
+
+  /**
+   * For method parameters (and 'this' in generic classes), look up the generic
+   * type from the method/class Signature attribute. Returns null if this variable
+   * is not a method param/this or if no generic signature is available.
+   *
+   * This is the core fix for generic type propagation: without this, method
+   * param types are erased (Object[], Pool) from LVT, hiding the generic types
+   * (R[], Pool&lt;PO&gt;) that javac needs for type checking.
+   */
+  private VarType getMethodParamGenericType() {
+    MethodWrapper mw = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+    if (mw == null || mw.methodStruct == null) return null;
+
+    boolean isStatic = mw.methodStruct.hasModifier(CodeConstants.ACC_STATIC);
+
+    // Handle 'this' (index 0 in non-static methods) — use class generic signature
+    if (!isStatic && index == 0) {
+      ClassNode cls = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+      if (cls != null && cls.classStruct.getSignature() != null) {
+        GenericType classGenType = cls.classStruct.getSignature().genericType;
+        if (classGenType != null && classGenType.isGeneric()) {
+          return classGenType;
+        }
+      }
+      return null;
+    }
+
+    // Handle method parameters — use method generic signature or erased descriptor
+    org.jetbrains.java.decompiler.struct.gen.generics.GenericMethodDescriptor sig = mw.methodStruct.getSignature();
+
+    int paramStart = isStatic ? 0 : 1;
+
+    // Map the variable index to the parameter position
+    MethodDescriptor md = MethodDescriptor.parseDescriptor(mw.methodStruct.getDescriptor());
+    int paramIdx = -1;
+    int varIdx = paramStart;
+    for (int i = 0; i < md.params.length; i++) {
+      if (varIdx == index) {
+        paramIdx = i;
+        break;
+      }
+      varIdx += md.params[i].stackSize;
+    }
+    if (paramIdx < 0 || paramIdx >= md.params.length) return null;
+
+    // If signature has generic types, prefer them
+    if (sig != null && paramIdx < sig.parameterTypes.size()) {
+      VarType sigType = sig.parameterTypes.get(paramIdx);
+      if (sigType != null && sigType.isGeneric()) {
+        return sigType;
+      }
+    }
+    // Return the erased descriptor type for method params to prevent
+    // narrowObjectTypes from changing the type visible to getCastedExprent.
+    // Without this, a method param `Object arrayList0` gets narrowed to ArrayList,
+    // and assignments like `ArrayList x = arrayList0` don't get the needed cast.
+    return md.params[paramIdx];
   }
 
   @Override

@@ -482,6 +482,9 @@ public class MethodProcessor implements Runnable {
     // how each Object variable is actually used and narrows the type.
     if (DecompilerContext.isRoundtripFidelity()) {
       VarTypeProcessor.narrowObjectTypes(root, varProc);
+      // Upgrade raw collection types to generic based on lambda usage.
+      // E.g., HashSet → HashSet<IsoChunk> when forEach lambda has typed params.
+      VarTypeProcessor.upgradeRawCollectionTypes(root, varProc);
       // Mark all for-each loops to force var for their variables.
       // This must happen after narrowing so that for-each vars that were
       // narrowed from Object still get var (needed for raw collections).

@@ -1,9 +1,11 @@
 // Copyright 2000-2020 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license that can be found in the LICENSE file.
 package org.jetbrains.java.decompiler.modules.decompiler.stats;
 
+import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.code.SwitchInstruction;
 import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
+import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.main.collectors.CounterContainer;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
@@ -133,12 +135,25 @@ public class SwitchStatement extends Statement {
     // RTF: if the switch expression type is Object (from erased generics) but all
     // case values are int constants, inject (int) cast. The bytecode uses
     // LOOKUPSWITCH/TABLESWITCH which operates on int.
+    // Skip for enums (valid switch selectors) and already-int types (redundant cast).
     if (DecompilerContext.isRoundtripFidelity()
         && hasOnlyIntConstCases()) {
-      String switchStr = switchBuf.toString();
-      if (switchStr.startsWith("switch (") && switchStr.endsWith(")")) {
-        String inner = switchStr.substring("switch (".length(), switchStr.length() - 1);
-        switchBuf = new TextBuffer().append("switch ((int)").append(inner).append(")");
+      boolean skipCast = false;
+      if (switch_type.typeFamily == TypeFamily.INTEGER) {
+        skipCast = true;
+      }
+      if (!skipCast && switch_type.type == CodeType.OBJECT) {
+        StructClass swCls = DecompilerContext.getStructContext().getClass(switch_type.value);
+        if (swCls != null && swCls.hasModifier(CodeConstants.ACC_ENUM)) {
+          skipCast = true;
+        }
+      }
+      if (!skipCast) {
+        String switchStr = switchBuf.toString();
+        if (switchStr.startsWith("switch (") && switchStr.endsWith(")")) {
+          String inner = switchStr.substring("switch (".length(), switchStr.length() - 1);
+          switchBuf = new TextBuffer().append("switch ((int)").append(inner).append(")");
+        }
       }
     }
 

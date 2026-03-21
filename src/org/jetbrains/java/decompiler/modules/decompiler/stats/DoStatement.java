@@ -166,7 +166,12 @@ public class DoStatement extends Statement {
             if (iterType.type == CodeType.OBJECT && iterType.arrayDim == 0) {
               // The iterable is a non-array OBJECT type. If the for-each var is narrowed,
               // we need a cast. Emit: (Iterable<Type>)(Iterable<?>)iterable
+              // Wrap in parentheses if the iterable is a low-precedence expression (ternary, etc.)
               String typeStr = ExprProcessor.getCastTypeName(feType);
+              Exprent iterExpr = incExprent.get(0);
+              if (iterExpr.getPrecedence() >= FunctionExprent.FunctionType.CAST.precedence) {
+                iterBuf = iterBuf.encloseWithParens();
+              }
               iterBuf = iterBuf.enclose("(Iterable<" + typeStr + ">)(Iterable<?>)", "");
             }
           }
