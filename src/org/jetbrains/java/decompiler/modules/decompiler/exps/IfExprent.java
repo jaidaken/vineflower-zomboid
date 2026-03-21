@@ -45,6 +45,10 @@ public class IfExprent extends Exprent {
       this.functionType = functionType;
     }
 
+    public FunctionType getFunctionType() {
+      return functionType;
+    }
+
     public Type getNegative() {
       if (this == VALUE) throw new IllegalArgumentException();
       // All types except VALUE are paired up with their inverse,
@@ -89,7 +93,9 @@ public class IfExprent extends Exprent {
 
   @Override
   public Exprent copy() {
-    return new IfExprent(condition.copy(), bytecode);
+    IfExprent copy = new IfExprent(condition.copy(), bytecode);
+    copy.originalBytecodeType = this.originalBytecodeType;
+    return copy;
   }
 
   @Override

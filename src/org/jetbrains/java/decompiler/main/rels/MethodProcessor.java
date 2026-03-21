@@ -537,6 +537,14 @@ public class MethodProcessor implements Runnable {
       hoistSuperFromLabelBlock(root);
     }
 
+    // RTF: fix guard clause inversions by detecting IfStatements where the
+    // condition direction was flipped from the original bytecode. For IFTYPE_IFELSE
+    // statements, swap the if/else bodies and negate the condition to restore
+    // the original branch direction.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      fixGuardClauseInversions(root);
+    }
+
     // RTF: final repair pass for orphaned label edges after all transformations.
     // Edges may have their closure set but not be registered in the closure's
     // labelEdges list, causing "break labelN;" to be emitted without a matching
@@ -579,6 +587,59 @@ public class MethodProcessor implements Runnable {
     }
 
     return root;
+  }
+
+  /**
+   * RTF: fix guard clause inversions. Walk the statement tree and find
+   * IfStatements where the condition was flipped from the original bytecode
+   * direction. For if-else statements, swap bodies and negate condition.
+   */
+  private static void fixGuardClauseInversions(Statement stat) {
+    if (stat instanceof IfStatement) {
+      IfStatement ifStat = (IfStatement) stat;
+      if (ifStat.iftype == IfStatement.IFTYPE_IFELSE && ifStat.getHeadexprent() instanceof IfExprent) {
+        IfExprent ifExpr = (IfExprent) ifStat.getHeadexprent();
+        IfExprent.Type origType = ifExpr.getOriginalBytecodeType();
+        if (origType != null) {
+          // Check if the current condition matches the original bytecode direction.
+          // The condition at this point has been through initExprents (possibly negated).
+          // If negated=true was set during construction, the condition was double-negated
+          // back to the original. But the if/else bodies are swapped. We want to undo
+          // both: negate the condition AND swap the bodies.
+          Exprent cond = ifExpr.getCondition();
+          // Detect if the current condition's top-level comparison matches the NEGATED
+          // bytecode type (meaning no double-negation happened = correct direction)
+          // or the ORIGINAL bytecode type (meaning double-negation happened = inverted)
+          if (cond instanceof FunctionExprent) {
+            FunctionExprent func = (FunctionExprent) cond;
+            FunctionExprent.FunctionType condFunc = func.getFuncType();
+            // Check if condition matches the original bytecode type
+            // If so, initExprents double-negated and we should undo it
+            if (origType.getFunctionType() != null && condFunc == origType.getFunctionType()) {
+              // Condition matches original bytecode = was double-negated
+              // Swap if/else bodies and negate condition to restore
+              Statement ifBody = ifStat.getIfstat();
+              Statement elseBody = ifStat.getElsestat();
+              if (ifBody != null && elseBody != null) {
+                // Swap the statement references
+                ifStat.setIfstat(elseBody);
+                ifStat.setElsestat(ifBody);
+                // Negate the condition
+                ifExpr.negateIf();
+                // Swap the edges too
+                StatEdge tmpEdge = ifStat.getIfEdge();
+                ifStat.setIfEdge(ifStat.getElseEdge());
+                ifStat.setElseEdge(tmpEdge);
+              }
+            }
+          }
+        }
+      }
+    }
+    // Recurse into children
+    for (Statement child : stat.getStats()) {
+      fixGuardClauseInversions(child);
+    }
   }
 
   /**
