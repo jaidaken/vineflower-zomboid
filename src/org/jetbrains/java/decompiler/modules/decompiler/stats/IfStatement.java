@@ -527,6 +527,10 @@ public class IfStatement extends Statement {
 
   public void fixIfInvariantEmptyIfBranch() {
     // if(){;}else{...} -> if(!){...}
+    // RTF: preserve original branch direction — do not swap if/else branches
+    if (DecompilerContext.isRoundtripFidelity()) {
+      return;
+    }
 
     Statement ifStat = this.getIfstat();
 
