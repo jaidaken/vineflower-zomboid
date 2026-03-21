@@ -167,11 +167,15 @@ public class VarExprent extends Exprent implements Pattern {
         return sigType;
       }
     }
-    // Return the erased descriptor type for method params to prevent
-    // narrowObjectTypes from changing the type visible to getCastedExprent.
-    // Without this, a method param `Object arrayList0` gets narrowed to ArrayList,
-    // and assignments like `ArrayList x = arrayList0` don't get the needed cast.
-    return md.params[paramIdx];
+    // For Object-typed method params, return the erased type to prevent
+    // narrowObjectTypes from hiding the Object→specific gap needed for casts.
+    // Only for Object params — non-Object params (InputStream, etc.) should
+    // keep their narrowed types to avoid breaking type resolution.
+    VarType descType = md.params[paramIdx];
+    if (descType.type == CodeType.OBJECT && "java/lang/Object".equals(descType.value)) {
+      return descType;
+    }
+    return null;
   }
 
   @Override
