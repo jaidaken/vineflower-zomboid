@@ -633,8 +633,9 @@ public class MethodProcessor implements Runnable {
         headExpr.setCondition(simplified != null ? simplified : negated);
       }
     }
-    // For IFTYPE_IF: the structural improvement from IfHelper outweighs
-    // the small branch direction mismatch (~1-3 instructions per method).
+    // IFTYPE_IF: negating the condition causes widespread regressions because
+    // propagateBoolNot modifies compound conditions destructively.
+    // Left as a known limitation for now.
 
     ifStat.setRtfConditionFlipped(false);
   }
