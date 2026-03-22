@@ -117,21 +117,12 @@ public final class DeadCodeEliminator {
               return true;
             }
           }
-          // Check if the PARENT sequence or loop has a continue/break edge
-          // that makes this the effective last statement
-          Statement parent = stat.getParent();
-          if (parent != null) {
-            for (StatEdge pedge : parent.getAllDirectSuccessorEdges()) {
-              if (pedge.getType() != StatEdge.TYPE_REGULAR) {
-                // Parent has a non-regular edge (continue/break)
-                // If this statement is the last in the parent's stats,
-                // everything after it in the outer sequence is unreachable
-                if (parent.getStats().getLast() == stat) {
-                  return true;
-                }
-              }
-            }
-          }
+          // NOTE: Previously checked parent's break/continue edges to infer
+          // this statement is an unconditional exit. Removed because the parent's
+          // edges don't mean THIS statement exits unconditionally - the parent
+          // exits after all children run. The check was incorrectly removing
+          // reachable code at the end of methods (VoiceManager.InitVMClient,
+          // GameLoadingState.enter, IsoWindow constructor).
         }
         return false;
       }

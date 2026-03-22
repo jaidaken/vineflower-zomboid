@@ -633,9 +633,10 @@ public class MethodProcessor implements Runnable {
         headExpr.setCondition(simplified != null ? simplified : negated);
       }
     }
-    // IFTYPE_IF: negating the condition causes widespread regressions because
-    // propagateBoolNot modifies compound conditions destructively.
-    // Left as a known limitation for now.
+    // IFTYPE_IF: condition changes (even simple inversions like NE->EQ) change the
+    // compiled branch opcode, causing more methods to diverge than it fixes.
+    // This category requires a fundamentally different approach - fixing at the
+    // CFG/block ordering level rather than the expression level.
 
     ifStat.setRtfConditionFlipped(false);
   }
