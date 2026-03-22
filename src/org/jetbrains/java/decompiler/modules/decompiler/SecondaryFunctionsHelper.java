@@ -52,8 +52,7 @@ public final class SecondaryFunctionsHelper {
   public static boolean identifySecondaryFunctions(Statement stat, VarProcessor varProc, IdentifySecondaryOptions options) {
     if (stat.getExprents() == null) {
       // if(){;}else{...} -> if(!){...}
-      // RTF: skip — negating the condition flips bytecode branch direction
-      if (stat instanceof IfStatement && !DecompilerContext.isRoundtripFidelity()) {
+      if (stat instanceof IfStatement) {
         IfStatement ifelsestat = (IfStatement) stat;
         Statement ifstat = ifelsestat.getIfstat();
 
@@ -86,6 +85,11 @@ public final class SecondaryFunctionsHelper {
           // negate head expression
           ifelsestat.setNegated(!ifelsestat.isNegated());
           ifelsestat.getHeadexprentList().set(0, ((IfExprent) ifelsestat.getHeadexprent().copy()).negateIf());
+
+          // RTF: track that this transformation flipped the condition direction
+          if (DecompilerContext.isRoundtripFidelity()) {
+            ifelsestat.toggleRtfConditionFlipped();
+          }
 
           return true;
         } else if (ifelsestat.iftype == IfStatement.IFTYPE_IF && ifstat != null && ifstat.getExprents() != null &&
@@ -299,7 +303,7 @@ public final class SecondaryFunctionsHelper {
           case EQ:
           case NE:
             if (lstOperands.get(0).getExprType().type == CodeType.BOOLEAN &&
-              lstOperands.get(1).getExprType().type == CodeType.BOOLEAN) {
+                lstOperands.get(1).getExprType().type == CodeType.BOOLEAN) {
               for (int i = 0; i < 2; i++) {
                 if (lstOperands.get(i) instanceof ConstExprent) {
                   ConstExprent cexpr = (ConstExprent) lstOperands.get(i);

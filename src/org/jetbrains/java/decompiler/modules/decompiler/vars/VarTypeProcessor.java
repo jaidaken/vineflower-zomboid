@@ -353,8 +353,12 @@ public class VarTypeProcessor {
     Map<Integer, List<VarType>> varAssignTypes = new HashMap<>();
     collectAssignmentTypes(root, minTypes, varAssignTypes);
 
-    // For each variable that's currently Object, check if all assignments produce
-    // the same more specific type
+    // Also collect usage-based type info (method call instances, field access,
+    // method/constructor argument positions)
+    collectUsageTypes(root, minTypes, varAssignTypes);
+
+    // For each variable that's currently Object, check if all assignments/usages
+    // produce the same more specific type
     for (Map.Entry<Integer, List<VarType>> entry : varAssignTypes.entrySet()) {
       int varIndex = entry.getKey();
       List<VarType> types = entry.getValue();
@@ -453,6 +457,57 @@ public class VarTypeProcessor {
           if (className != null && !"java/lang/Object".equals(className)) {
             varAssignTypes.computeIfAbsent(var.getIndex(), k -> new ArrayList<>())
                 .add(new VarType(CodeType.OBJECT, 0, className));
+          }
+        }
+      }
+    }
+    // Check if Object variable is passed as argument to a method/constructor call
+    if (expr instanceof InvocationExprent) {
+      InvocationExprent invoc = (InvocationExprent) expr;
+      MethodDescriptor md = invoc.getDescriptor();
+      List<Exprent> args = invoc.getLstParameters();
+      if (md != null && args != null) {
+        for (int i = 0; i < args.size() && i < md.params.length; i++) {
+          Exprent arg = args.get(i);
+          if (arg instanceof VarExprent) {
+            VarExprent var = (VarExprent) arg;
+            VarVersionPair pair = new VarVersionPair(var.getIndex(), 0);
+            VarType currentType = minTypes.get(pair);
+            if (currentType != null && "java/lang/Object".equals(currentType.value)) {
+              VarType paramType = md.params[i];
+              if (paramType.typeFamily == TypeFamily.OBJECT
+                  && !"java/lang/Object".equals(paramType.value)) {
+                varAssignTypes.computeIfAbsent(var.getIndex(), k -> new ArrayList<>())
+                    .add(paramType);
+              }
+            }
+          }
+        }
+      }
+    }
+    // Check if Object variable is passed to a constructor (NewExprent)
+    if (expr instanceof NewExprent) {
+      NewExprent newExpr = (NewExprent) expr;
+      if (newExpr.getConstructor() != null) {
+        InvocationExprent ctor = newExpr.getConstructor();
+        MethodDescriptor md = ctor.getDescriptor();
+        List<Exprent> args = ctor.getLstParameters();
+        if (md != null && args != null) {
+          for (int i = 0; i < args.size() && i < md.params.length; i++) {
+            Exprent arg = args.get(i);
+            if (arg instanceof VarExprent) {
+              VarExprent var = (VarExprent) arg;
+              VarVersionPair pair = new VarVersionPair(var.getIndex(), 0);
+              VarType currentType = minTypes.get(pair);
+              if (currentType != null && "java/lang/Object".equals(currentType.value)) {
+                VarType paramType = md.params[i];
+                if (paramType.typeFamily == TypeFamily.OBJECT
+                    && !"java/lang/Object".equals(paramType.value)) {
+                  varAssignTypes.computeIfAbsent(var.getIndex(), k -> new ArrayList<>())
+                      .add(paramType);
+                }
+              }
+            }
           }
         }
       }

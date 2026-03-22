@@ -177,23 +177,14 @@ public class StackVarsProcessor {
             Exprent next = null;
 
             if (index == lst.size() - 1) {
-              // In RTF mode, don't take 'next' from the next DirectNode list.
-              // RTF changes statement tree structure, causing different DirectNode
-              // boundaries. Cross-node 'next' can lead to incorrect variable
-              // inlining that chains method calls across statement boundaries.
-              if (i < lstLists.size() - 1 && !DecompilerContext.isRoundtripFidelity()) {
+              if (i < lstLists.size() - 1) {
                 next = lstLists.get(i + 1).get(0);
               }
             } else {
               next = lst.get(index + 1);
             }
 
-            // In RTF mode, disable the aggressive second-pass inlining that looks at
-            // exprents.get(index+2). RTF's IfHelper changes alter statement tree structure,
-            // causing DirectGraph flattening to produce different exprent orderings.
-            // The second pass can then incorrectly inline variables across statement
-            // boundaries, producing invalid method chains (e.g., add().alloc().init()).
-            boolean simplifyAcrossStack = stackStage == 1 && !DecompilerContext.isRoundtripFidelity();
+            boolean simplifyAcrossStack = stackStage == 1;
 
             // {newIndex, changed}
             iterateExprent(lst, index, next, mapVarValues, ssa, simplifyAcrossStack, ret, options);

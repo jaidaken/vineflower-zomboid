@@ -96,7 +96,14 @@ public class ExitExprent extends Exprent {
         }
         buf.append(' ');
 
-        ExprProcessor.getCastedExprent(value, ret, buf, indent, ExprProcessor.NullCastType.DONT_CAST_AT_ALL, false, false, false);
+        // RTF: when returning from a GENVAR method (e.g., <E> E foo()), force the cast
+        // so that Object-typed variables get cast to E. Without castAlways, the cast is
+        // suppressed because the erased types (both Object) match.
+        if (DecompilerContext.isRoundtripFidelity() && ret.type == CodeType.GENVAR) {
+          ExprProcessor.getCastedExprent(value, ret, buf, indent, ExprProcessor.NullCastType.DONT_CAST, true, false, false);
+        } else {
+          ExprProcessor.getCastedExprent(value, ret, buf, indent, ExprProcessor.NullCastType.DONT_CAST_AT_ALL, false, false, false);
+        }
 
         // RTF: same as assignment-level cast — when the return expression
         // is an InvocationExprent returning a wider type than the method's

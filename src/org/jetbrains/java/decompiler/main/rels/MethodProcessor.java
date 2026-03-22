@@ -590,44 +590,53 @@ public class MethodProcessor implements Runnable {
   }
 
   /**
-   * RTF: fix guard clause inversions. Walk the statement tree and find
-   * IfStatements where the condition was flipped from the original bytecode
-   * direction. For if-else statements, swap bodies and negate condition.
+   * RTF: fix guard clause inversions by walking the statement tree bottom-up.
+   * For IFTYPE_IFELSE with rtfConditionFlipped: swap if/else bodies and negate
+   * condition. Works for all condition types (simple, compound, ternary) because
+   * it operates on structure, not expression internals.
+   * For IFTYPE_IF with rtfConditionFlipped: clear the flag without fixing
+   * (known limitation with small per-method impact).
    */
   private static void fixGuardClauseInversions(Statement stat) {
-    if (stat instanceof IfStatement) {
-      IfStatement ifStat = (IfStatement) stat;
-      // Only handle IFTYPE_IFELSE with simple direct comparisons where
-      // we can safely swap bodies. More complex cases (IFTYPE_IF, compound
-      // conditions) require constructor-level changes that are too risky.
-      if (ifStat.iftype == IfStatement.IFTYPE_IFELSE && ifStat.getHeadexprent() instanceof IfExprent) {
-        IfExprent ifExpr = (IfExprent) ifStat.getHeadexprent();
-        IfExprent.Type origType = ifExpr.getOriginalBytecodeType();
-        if (origType != null && origType.getFunctionType() != null) {
-          Exprent cond = ifExpr.getCondition();
-          // Only handle simple comparisons (EQ, NE, LT, GE, GT, LE, etc.)
-          // where the condition's FunctionType directly matches the original bytecode
-          if (cond instanceof FunctionExprent) {
-            FunctionExprent.FunctionType condFunc = ((FunctionExprent) cond).getFuncType();
-            if (condFunc == origType.getFunctionType()) {
-              Statement ifBody = ifStat.getIfstat();
-              Statement elseBody = ifStat.getElsestat();
-              if (ifBody != null && elseBody != null) {
-                ifStat.setIfstat(elseBody);
-                ifStat.setElsestat(ifBody);
-                ifExpr.negateIf();
-                StatEdge tmpEdge = ifStat.getIfEdge();
-                ifStat.setIfEdge(ifStat.getElseEdge());
-                ifStat.setElseEdge(tmpEdge);
-              }
-            }
-          }
-        }
-      }
-    }
-    for (Statement child : stat.getStats()) {
+    // Process children first (bottom-up) so inner if-statements are fixed
+    // before outer ones that may depend on them.
+    for (Statement child : new ArrayList<>(stat.getStats())) {
       fixGuardClauseInversions(child);
     }
+
+    if (!(stat instanceof IfStatement)) {
+      return;
+    }
+    IfStatement ifStat = (IfStatement) stat;
+    if (!ifStat.isRtfConditionFlipped()) {
+      return;
+    }
+
+    if (ifStat.iftype == IfStatement.IFTYPE_IFELSE) {
+      Statement ifBody = ifStat.getIfstat();
+      Statement elseBody = ifStat.getElsestat();
+      if (ifBody != null && elseBody != null) {
+        // Swap bodies
+        ifStat.setIfstat(elseBody);
+        ifStat.setElsestat(ifBody);
+
+        // Swap edges
+        StatEdge tmpEdge = ifStat.getIfEdge();
+        ifStat.setIfEdge(ifStat.getElseEdge());
+        ifStat.setElseEdge(tmpEdge);
+
+        // Negate condition (double-negation cancels via propagateBoolNot)
+        IfExprent headExpr = ifStat.getHeadexprent();
+        Exprent negated = new FunctionExprent(
+          FunctionExprent.FunctionType.BOOL_NOT, headExpr.getCondition(), null);
+        Exprent simplified = SecondaryFunctionsHelper.propagateBoolNot(negated);
+        headExpr.setCondition(simplified != null ? simplified : negated);
+      }
+    }
+    // For IFTYPE_IF: the structural improvement from IfHelper outweighs
+    // the small branch direction mismatch (~1-3 instructions per method).
+
+    ifStat.setRtfConditionFlipped(false);
   }
 
   /**

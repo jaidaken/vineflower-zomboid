@@ -3,6 +3,7 @@
  */
 package org.jetbrains.java.decompiler.modules.decompiler.exps;
 
+import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.sforms.SFormsConstructor;
 import org.jetbrains.java.decompiler.modules.decompiler.sforms.VarMapHolder;
@@ -106,10 +107,41 @@ public class IfExprent extends Exprent {
 
   @Override
   public TextBuffer toJava(int indent) {
-    // The general context of if conditions is that they must always return booleans
-    condition.getInferredExprType(VarType.VARTYPE_BOOLEAN);
+    // The general context of if conditions is that they must always return booleans.
+    // RTF: skip inference for simple comparisons (NE/EQ/LT/etc.) because it propagates
+    // BOOLEAN to operands, changing const(0) type to BOOLEAN, which causes NE(var,0)
+    // to simplify to bare var during rendering. Comparisons already return BOOLEAN.
+    // Still run inference for compound conditions (&&, ||) and non-comparison expressions
+    // because those need the type hint for correct rendering.
+    boolean skipInference = false;
+    if (DecompilerContext.isRoundtripFidelity()) {
+      if (condition instanceof FunctionExprent) {
+        FunctionExprent.FunctionType ft = ((FunctionExprent) condition).getFuncType();
+        if (ft.ordinal() >= FunctionExprent.FunctionType.EQ.ordinal()
+            && ft.ordinal() <= FunctionExprent.FunctionType.LE.ordinal()) {
+          skipInference = true;
+        }
+      }
+    }
+    if (!skipInference) {
+      condition.getInferredExprType(VarType.VARTYPE_BOOLEAN);
+    }
 
-    TextBuffer buf = condition.toJava(indent);
+    // RTF: if condition is a bare VarExprent with non-boolean type after all
+    // simplification passes (variable merging changed boolean to int), wrap
+    // in explicit "!= 0" for rendering only.
+    Exprent renderCond = condition;
+    if (DecompilerContext.isRoundtripFidelity() && condition instanceof VarExprent) {
+      VarType ct = condition.getExprType();
+      if (ct != null && ct.type != org.jetbrains.java.decompiler.struct.gen.CodeType.BOOLEAN
+          && ct.typeFamily == org.jetbrains.java.decompiler.struct.gen.TypeFamily.INTEGER) {
+        renderCond = new FunctionExprent(FunctionExprent.FunctionType.NE,
+          java.util.Arrays.asList(condition, new ConstExprent(VarType.VARTYPE_INT, 0, null)),
+          condition.bytecode);
+      }
+    }
+
+    TextBuffer buf = renderCond.toJava(indent);
     buf.pushNewlineGroup(indent, 1);
     buf.appendPossibleNewline();
     buf.enclose("if (", ")");

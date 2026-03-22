@@ -41,6 +41,12 @@ public class IfStatement extends Statement {
 
   private boolean hasPPMM = false;
 
+  // RTF: tracks whether IfHelper transformations have flipped the condition
+  // from the original bytecode branch direction. Toggled each time a
+  // transformation wraps the condition in BOOL_NOT. The post-pass uses this
+  // to swap if/else bodies back to the correct parity.
+  private boolean rtfConditionFlipped = false;
+
   private final List<Exprent> headexprent = new ArrayList<>(1); // contains IfExprent
 
   // *****************************************************************************
@@ -342,6 +348,7 @@ public class IfStatement extends Statement {
     IfStatement is = new IfStatement();
     is.iftype = this.iftype;
     is.negated = this.negated;
+    is.rtfConditionFlipped = this.rtfConditionFlipped;
 
     return is;
   }
@@ -428,6 +435,18 @@ public class IfStatement extends Statement {
 
   public void setHasPPMM(boolean hasPPMM) {
     this.hasPPMM = hasPPMM;
+  }
+
+  public boolean isRtfConditionFlipped() {
+    return rtfConditionFlipped;
+  }
+
+  public void setRtfConditionFlipped(boolean rtfConditionFlipped) {
+    this.rtfConditionFlipped = rtfConditionFlipped;
+  }
+
+  public void toggleRtfConditionFlipped() {
+    this.rtfConditionFlipped = !this.rtfConditionFlipped;
   }
 
   @Override
@@ -527,10 +546,6 @@ public class IfStatement extends Statement {
 
   public void fixIfInvariantEmptyIfBranch() {
     // if(){;}else{...} -> if(!){...}
-    // RTF: preserve original branch direction — do not swap if/else branches
-    if (DecompilerContext.isRoundtripFidelity()) {
-      return;
-    }
 
     Statement ifStat = this.getIfstat();
 
@@ -572,5 +587,10 @@ public class IfStatement extends Statement {
     // negate head expression
     this.setNegated(!this.isNegated());
     this.getHeadexprentList().set(0, ((IfExprent) this.getHeadexprent().copy()).negateIf());
+
+    // RTF: track that this transformation flipped the condition direction
+    if (DecompilerContext.isRoundtripFidelity()) {
+      this.toggleRtfConditionFlipped();
+    }
   }
 }
