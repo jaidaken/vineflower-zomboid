@@ -100,33 +100,18 @@ public final class DeadCodeEliminator {
   }
 
   private static boolean isUnconditionalExit(Statement stat) {
-    if (stat.hasBasicSuccEdge()) {
-      List<StatEdge> regularSuccs = stat.getSuccessorEdges(StatEdge.TYPE_REGULAR);
-      if (!regularSuccs.isEmpty()) {
-        // In RTF mode, check if the statement also has break/continue edges
-        // or if its exprents contain a return/throw (exprent-level control transfer
-        // that the statement edge graph doesn't reflect).
-        if (DecompilerContext.isRoundtripFidelity()) {
-          List<StatEdge> breakSuccs = stat.getSuccessorEdges(StatEdge.TYPE_BREAK);
-          List<StatEdge> contSuccs = stat.getSuccessorEdges(StatEdge.TYPE_CONTINUE);
-          if (!breakSuccs.isEmpty() || !contSuccs.isEmpty()) {
-            return true;
-          }
-          for (StatEdge edge : stat.getAllDirectSuccessorEdges()) {
-            if (edge.getType() != StatEdge.TYPE_REGULAR) {
-              return true;
-            }
-          }
-          // NOTE: Previously checked parent's break/continue edges to infer
-          // this statement is an unconditional exit. Removed because the parent's
-          // edges don't mean THIS statement exits unconditionally - the parent
-          // exits after all children run. The check was incorrectly removing
-          // reachable code at the end of methods (VoiceManager.InitVMClient,
-          // GameLoadingState.enter, IsoWindow constructor).
-        }
-        return false;
-      }
+    // A statement with regular successor edges can reach the next statement
+    // via at least one execution path, so it is NOT an unconditional exit.
+    // This check must come first, before hasBasicSuccEdge(), because
+    // hasBasicSuccEdge() returns false for IFTYPE_IFELSE even when one
+    // branch falls through (creating a regular successor edge via
+    // collapseNodesToStatement).
+    List<StatEdge> regularSuccs = stat.getSuccessorEdges(StatEdge.TYPE_REGULAR);
+    if (!regularSuccs.isEmpty()) {
+      return false;
+    }
 
+    if (stat.hasBasicSuccEdge()) {
       List<StatEdge> directSuccs = stat.getAllDirectSuccessorEdges();
       if (directSuccs.isEmpty()) {
         return false;

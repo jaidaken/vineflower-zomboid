@@ -121,7 +121,16 @@ public class SequenceStatement extends Statement {
       // javac would reject as "unreachable statement". Stop rendering.
       if (DecompilerContext.isRoundtripFidelity() && i < stats.size() - 1
           && endsWithNonRegularExit(st)) {
-        break;
+        // Safety check: if the next child is the destination of a break edge
+        // from within the current child, a control-flow path reaches it and
+        // it must not be suppressed. This happens when an IfStatement (or
+        // other branching statement) has one branch that exits and another
+        // that falls through - the fall-through becomes a TYPE_BREAK edge
+        // during collapseNodesToStatement, making the next sibling reachable.
+        Statement nextChild = stats.get(i + 1);
+        if (!hasBreakEdgeFromWithin(st, nextChild)) {
+          break;
+        }
       }
 
       // RTF: a try-finally can make subsequent siblings unreachable in two ways:
@@ -160,8 +169,41 @@ public class SequenceStatement extends Statement {
    *
    * For SequenceStatements, this recursively checks the last child, since
    * the sequence's execution ends with its last child's exit.
+   *
+   * For IfStatements, both branches must end with non-regular exits for the
+   * code after the if to be unreachable. A single exiting branch does not
+   * make subsequent code unreachable — the other branch falls through.
    */
   private static boolean endsWithNonRegularExit(Statement stat) {
+    // For IfStatements: analyze branch structure instead of relying on
+    // the edge check alone. An if-else only makes subsequent code unreachable
+    // if BOTH branches exit. An if-without-else always has a fall-through
+    // path (when the condition is false).
+    if (stat instanceof IfStatement) {
+      IfStatement ifStat = (IfStatement) stat;
+      if (ifStat.iftype == IfStatement.IFTYPE_IFELSE) {
+        // Both branches must end with non-regular exits
+        Statement ifBody = ifStat.getIfstat();
+        Statement elseBody = ifStat.getElsestat();
+        return ifBody != null && elseBody != null
+            && endsWithNonRegularExit(ifBody)
+            && endsWithNonRegularExit(elseBody);
+      }
+      // IFTYPE_IF: the false-path is the IfStatement's own successor edge.
+      // Both the if-body AND the false-path must exit for subsequent code
+      // to be unreachable.
+      List<StatEdge> ifSuccs = stat.getSuccessorEdges(STATEDGE_DIRECT_ALL);
+      if (ifSuccs.size() == 1) {
+        StatEdge edge = ifSuccs.get(0);
+        if (edge.getType() != StatEdge.TYPE_REGULAR && edge.explicit) {
+          // False-path exits via break/continue. Also require if-body to exit.
+          Statement ifBody = ifStat.getIfstat();
+          return ifBody != null && endsWithNonRegularExit(ifBody);
+        }
+      }
+      return false;
+    }
+
     // Check the statement's own direct successor edges (same condition as jmpWrapper)
     List<StatEdge> succs = stat.getSuccessorEdges(STATEDGE_DIRECT_ALL);
     if (succs.size() == 1) {
@@ -220,6 +262,27 @@ public class SequenceStatement extends Statement {
       }
     }
 
+    return false;
+  }
+
+  /**
+   * Check if the destination statement is the target of a TYPE_BREAK edge
+   * whose source is strictly contained within the source statement. This
+   * indicates that a control-flow path from inside the source reaches the
+   * destination, so the destination is reachable even if the source's last
+   * executed child ends with a non-regular exit (return/throw/break).
+   *
+   * This happens when an IfStatement has one branch that exits and another
+   * that falls through: the fall-through edge becomes TYPE_BREAK during
+   * collapseNodesToStatement, and the next sibling in the outer sequence
+   * becomes a break target.
+   */
+  private static boolean hasBreakEdgeFromWithin(Statement source, Statement destination) {
+    for (StatEdge pred : destination.getPredecessorEdges(StatEdge.TYPE_BREAK)) {
+      if (source.containsStatementStrict(pred.getSource())) {
+        return true;
+      }
+    }
     return false;
   }
 
