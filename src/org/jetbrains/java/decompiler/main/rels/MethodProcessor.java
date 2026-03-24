@@ -494,6 +494,13 @@ public class MethodProcessor implements Runnable {
     varProc.setVarDefinitions(root);
     decompileRecord.add("SetVarDefinitions", root);
 
+    // RTF: narrow int-typed variables to boolean when they're assigned from
+    // boolean-returning methods or used in boolean contexts (&&, ||, if conditions).
+    // Runs AFTER setVarDefinitions so it can fix merged declaration types.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      VarTypeProcessor.narrowIntToBooleanTypes(root, varProc);
+    }
+
     // Make sure to update assignments after setting the var definitions!
     if (SecondaryFunctionsHelper.updateAssignments(root)) {
       decompileRecord.add("UpdateAssignments", root);

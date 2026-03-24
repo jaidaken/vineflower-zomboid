@@ -685,4 +685,139 @@ public class VarTypeProcessor {
       }
     }
   }
+
+  /**
+   * RTF post-pass: narrow INT-typed variables to BOOLEAN when evidence indicates
+   * boolean usage. The JVM stores booleans as int, so variables assigned from
+   * boolean-returning methods may be typed as int. This pass checks if an int
+   * variable has boolean assignments (from methods returning Z) and no non-boolean
+   * integer assignments (arithmetic, literals > 1), and narrows it to boolean.
+   */
+  public static void narrowIntToBooleanTypes(Statement root, VarProcessor varProc) {
+    Map<VarVersionPair, VarType> minTypes = varProc.getVarVersions().getTypeProcessor().getMapExprentMinTypes();
+
+    // For each int variable, track: [0] = has boolean assignment, [1] = has non-boolean int assignment
+    Map<Integer, boolean[]> evidence = new HashMap<>();
+    collectBoolEvidence(root, evidence);
+
+    Map<Integer, VarType> narrowed = new HashMap<>();
+    for (Map.Entry<Integer, boolean[]> entry : evidence.entrySet()) {
+      int varIndex = entry.getKey();
+      boolean[] ev = entry.getValue();
+      if (ev[0] && !ev[1]) {
+        // All assignments are boolean-compatible, no non-boolean int assignments
+        narrowed.put(varIndex, VarType.VARTYPE_BOOLEAN);
+        // Also update minTypes for all versions
+        for (Map.Entry<VarVersionPair, VarType> me : minTypes.entrySet()) {
+          if (me.getKey().var == varIndex && me.getValue() != null
+              && (me.getValue().typeFamily == TypeFamily.INTEGER
+                  || me.getValue().typeFamily == TypeFamily.BOOLEAN)) {
+            me.setValue(VarType.VARTYPE_BOOLEAN);
+          }
+        }
+      }
+    }
+
+    if (!narrowed.isEmpty()) {
+      updateVarExprentTypesInStat(root, narrowed);
+    }
+  }
+
+  private static void updateVarExprentTypesInStat(Statement stat, Map<Integer, VarType> narrowed) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        updateVarExprentTypesInExpr(expr, narrowed);
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      updateVarExprentTypesInExpr(expr, narrowed);
+    }
+    for (Statement st : stat.getStats()) {
+      updateVarExprentTypesInStat(st, narrowed);
+    }
+  }
+
+  private static void updateVarExprentTypesInExpr(Exprent expr, Map<Integer, VarType> narrowed) {
+    if (expr instanceof VarExprent) {
+      VarExprent var = (VarExprent) expr;
+      VarType newType = narrowed.get(var.getIndex());
+      if (newType != null) {
+        var.setVarType(newType);
+      }
+    }
+    for (Exprent sub : expr.getAllExprents()) {
+      updateVarExprentTypesInExpr(sub, narrowed);
+    }
+  }
+
+  private static void collectBoolEvidence(Statement stat, Map<Integer, boolean[]> evidence) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        collectBoolEvidenceFromExpr(expr, evidence);
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      collectBoolEvidenceFromExpr(expr, evidence);
+    }
+    for (Statement st : stat.getStats()) {
+      collectBoolEvidence(st, evidence);
+    }
+  }
+
+  private static void collectBoolEvidenceFromExpr(Exprent expr, Map<Integer, boolean[]> evidence) {
+    if (expr instanceof AssignmentExprent) {
+      AssignmentExprent assign = (AssignmentExprent) expr;
+      if (assign.getLeft() instanceof VarExprent) {
+        VarExprent var = (VarExprent) assign.getLeft();
+        // Check if declared as int but could be boolean
+        // After setVarDefinitions, merged vars may have int declaration
+        // even though individual versions were boolean
+        if (var.getVarType().typeFamily == TypeFamily.INTEGER
+            || var.getExprType().typeFamily == TypeFamily.INTEGER) {
+          int idx = var.getIndex();
+          boolean[] ev = evidence.computeIfAbsent(idx, k -> new boolean[2]);
+          Exprent rhs = assign.getRight();
+          if (isBooleanExpression(rhs)) {
+            ev[0] = true; // boolean assignment
+          } else if (rhs instanceof ConstExprent) {
+            Object val = ((ConstExprent) rhs).getValue();
+            if (val instanceof Integer && ((Integer) val == 0 || (Integer) val == 1)) {
+              ev[0] = true; // 0 or 1 constant (boolean-compatible)
+            } else {
+              ev[1] = true; // non-boolean int constant
+            }
+          } else {
+            ev[1] = true; // non-boolean assignment (arithmetic, etc.)
+          }
+        }
+      }
+    }
+    for (Exprent sub : expr.getAllExprents()) {
+      collectBoolEvidenceFromExpr(sub, evidence);
+    }
+  }
+
+  private static boolean isBooleanExpression(Exprent expr) {
+    VarType type = expr.getExprType();
+    if (type.equals(VarType.VARTYPE_BOOLEAN)) return true;
+    // Method call returning boolean
+    if (expr instanceof InvocationExprent) {
+      MethodDescriptor md = ((InvocationExprent) expr).getDescriptor();
+      if (md != null && md.ret.equals(VarType.VARTYPE_BOOLEAN)) return true;
+    }
+    // Comparison operators return boolean
+    if (expr instanceof FunctionExprent) {
+      FunctionExprent.FunctionType ft = ((FunctionExprent) expr).getFuncType();
+      if (ft == FunctionExprent.FunctionType.EQ || ft == FunctionExprent.FunctionType.NE
+          || ft == FunctionExprent.FunctionType.LT || ft == FunctionExprent.FunctionType.GE
+          || ft == FunctionExprent.FunctionType.GT || ft == FunctionExprent.FunctionType.LE
+          || ft == FunctionExprent.FunctionType.INSTANCEOF
+          || ft == FunctionExprent.FunctionType.BOOL_NOT
+          || ft == FunctionExprent.FunctionType.BOOLEAN_AND
+          || ft == FunctionExprent.FunctionType.BOOLEAN_OR) {
+        return true;
+      }
+    }
+    return false;
+  }
 }
