@@ -660,12 +660,14 @@ public class FunctionExprent extends Exprent {
       if (DecompilerContext.isRoundtripFidelity()) {
         leftOp = rtfCastObjectOperand(left, leftOp, right.getExprType());
         rightOp = rtfCastObjectOperand(right, rightOp, left.getExprType());
-        // RTF: && and || require boolean operands, but merged int/boolean vars may be int
+        // RTF: && and || require boolean operands, but merged int/boolean vars may
+        // have int DECLARATION type even though VarExprent.getExprType() returns boolean.
+        // Check both the expression type and the VarExprent's varType (declaration type).
         if (funcType == FunctionType.BOOLEAN_AND || funcType == FunctionType.BOOLEAN_OR) {
-          if (left.getExprType().typeFamily == TypeFamily.INTEGER) {
+          if (needsBoolConversion(left)) {
             leftOp = new TextBuffer().append("(").append(leftOp).append(" != 0)");
           }
-          if (right.getExprType().typeFamily == TypeFamily.INTEGER) {
+          if (needsBoolConversion(right)) {
             rightOp = new TextBuffer().append("(").append(rightOp).append(" != 0)");
           }
         }
@@ -820,6 +822,34 @@ public class FunctionExprent extends Exprent {
   }
 
   // Make sure that any boxing that is required is properly expressed
+  /**
+   * RTF: check if an expression used in a boolean context (&&, ||) needs != 0.
+   * This happens when a variable has int declaration type but boolean inferred type,
+   * due to SSA merging widening boolean to int.
+   */
+  private static boolean needsBoolConversion(Exprent expr) {
+    if (expr.getExprType().typeFamily == TypeFamily.INTEGER) {
+      return true;
+    }
+    // VarExprent may have boolean inferred type but int DECLARATION type.
+    // The naming convention uses the type at definition time: intN = int, booleanN = boolean.
+    // After type narrowing, the VarExprent's type may be boolean but the declaration is still int.
+    if (expr instanceof VarExprent) {
+      VarExprent var = (VarExprent) expr;
+      // Check varType (declaration type)
+      VarType varType = var.getVarType();
+      if (varType.typeFamily == TypeFamily.INTEGER && !varType.equals(VarType.VARTYPE_BOOLEAN)) {
+        return true;
+      }
+      // Check if the variable processor named it as int (definitive signal)
+      String name = var.getName();
+      if (name != null && name.startsWith("int")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private Exprent unwrapBoxing(Exprent expr) {
     if (expr instanceof InvocationExprent) {
       if (((InvocationExprent) expr).isUnboxingCall()) {

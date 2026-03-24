@@ -341,6 +341,23 @@ public class AssignmentExprent extends Exprent {
               buffer.append("(").append(afterEq).append(") ? 1 : 0");
             }
           }
+
+          // RTF: Object-to-specific assignment fix. When a VarExprent RHS renders
+          // as Object-typed (name starts with "var") but the LHS is specifically
+          // typed, add a cast. E.g., IsoGridSquare square1 = var0;
+          if (right instanceof VarExprent) {
+            String rendered2 = buffer.toString();
+            int eqIdx2 = rendered2.lastIndexOf("= ");
+            if (eqIdx2 >= 0) {
+              String afterEq2 = rendered2.substring(eqIdx2 + 2).trim();
+              if (!afterEq2.startsWith("(") && afterEq2.startsWith("var")
+                  && leftType.type == CodeType.OBJECT
+                  && !"java/lang/Object".equals(leftType.value)) {
+                buffer.setLength(eqIdx2 + 2);
+                buffer.append("(").appendCastTypeName(leftType).append(")").append(afterEq2);
+              }
+            }
+          }
         }
       }
     } else {
