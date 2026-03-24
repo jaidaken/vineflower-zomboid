@@ -629,10 +629,42 @@ public class FinallyProcessor {
 
       if (!this.compareBasicBlocksEx(graph, blockCatch, blockSample, (isFirstBlock ? 1 : 0) | (isTrueLastBlock ? 2 : 0), finallytype,
         entry.lstStoreVars)) {
+        // RTF debug: log comparison failure
+        if (DecompilerContext.isRoundtripFidelity()) {
+          try {
+            java.io.FileWriter fw = new java.io.FileWriter("/tmp/rtf_finally_debug.log", true);
+            fw.write("compareBasicBlocksEx FAILED: catch=" + blockCatch.id + " sample=" + blockSample.id + "\n");
+            fw.write("  catch seq length=" + blockCatch.getSeq().length() + " sample seq length=" + blockSample.getSeq().length() + "\n");
+            int minLen = Math.min(blockCatch.getSeq().length(), blockSample.getSeq().length());
+            for (int di = 0; di < minLen; di++) {
+              Instruction ic = blockCatch.getSeq().getInstr(di);
+              Instruction is = blockSample.getSeq().getInstr(di);
+              boolean eq = this.equalInstructions(ic, is, new ArrayList<>(entry.lstStoreVars));
+              if (!eq) {
+                fw.write("  DIFF at insn " + di + ": catch=" + ic + " sample=" + is + "\n");
+                fw.write("    catch opcode=" + ic.opcode + " ops=" + formatOps(ic) + "\n");
+                fw.write("    sample opcode=" + is.opcode + " ops=" + formatOps(is) + "\n");
+                break;
+              }
+            }
+            if (blockCatch.getSeq().length() != blockSample.getSeq().length()) {
+              fw.write("  length mismatch: catch=" + blockCatch.getSeq().length() + " sample=" + blockSample.getSeq().length() + "\n");
+            }
+            fw.close();
+          } catch (Exception ignored) {}
+        }
         return null;
       }
 
       if (blockSample.getSuccs().size() != blockCatch.getSuccs().size()) {
+        // RTF debug: log successor count mismatch
+        if (DecompilerContext.isRoundtripFidelity()) {
+          try {
+            java.io.FileWriter fw = new java.io.FileWriter("/tmp/rtf_finally_debug.log", true);
+            fw.write("SUCC COUNT MISMATCH: catch=" + blockCatch.id + "(" + blockCatch.getSuccs().size() + ") sample=" + blockSample.id + "(" + blockSample.getSuccs().size() + ")\n");
+            fw.close();
+          } catch (Exception ignored) {}
+        }
         return null;
       }
 
@@ -682,10 +714,24 @@ public class FinallyProcessor {
                 stack.add(new BlockStackEntry(sucCatch, sucSample, lst));
               }
             } else {
+              if (DecompilerContext.isRoundtripFidelity()) {
+                try {
+                  java.io.FileWriter fw = new java.io.FileWriter("/tmp/rtf_finally_debug.log", true);
+                  fw.write("EXCEPTION TYPE MISMATCH: catch=" + excCatch + " sample=" + excSample + "\n");
+                  fw.close();
+                } catch (Exception ignored) {}
+              }
               return null;
             }
           }
         } else {
+          if (DecompilerContext.isRoundtripFidelity()) {
+            try {
+              java.io.FileWriter fw = new java.io.FileWriter("/tmp/rtf_finally_debug.log", true);
+              fw.write("EXCEPTION COUNT MISMATCH: catch=" + blockCatch.id + "(" + blockCatch.getSuccExceptions().size() + ") sample=" + blockSample.id + "(" + blockSample.getSuccExceptions().size() + ")\n");
+              fw.close();
+            } catch (Exception ignored) {}
+          }
           return null;
         }
       }
@@ -945,8 +991,18 @@ public class FinallyProcessor {
     return true;
   }
 
+  private static String formatOps(Instruction insn) {
+    StringBuilder sb = new StringBuilder("[");
+    for (int i = 0; i < insn.operandsCount(); i++) {
+      if (i > 0) sb.append(", ");
+      sb.append(insn.operand(i));
+    }
+    return sb.append("]").toString();
+  }
+
   private static boolean isOpcVar(int opc) {
-    return opc >= CodeConstants.opc_iload && opc <= CodeConstants.opc_sastore;
+    return (opc >= CodeConstants.opc_iload && opc <= CodeConstants.opc_sastore)
+        || opc == CodeConstants.opc_iinc;
   }
 
   private static void deleteArea(ControlFlowGraph graph, Area area) {
