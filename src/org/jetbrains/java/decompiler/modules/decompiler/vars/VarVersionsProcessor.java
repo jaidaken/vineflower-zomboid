@@ -157,25 +157,7 @@ public class VarVersionsProcessor {
         //	mapExprentMinTypes.put(paar, VarType.VARTYPE_INT);
       }
       else if (type.type == CodeType.NULL) {
-        // Check if a sibling SSA version (same bytecode slot, different version) has
-        // a specific object type. If so, use that type instead of bare Object.
-        // This handles the case where null-init and typed-assignment are split into
-        // different SSA versions but represent the same logical variable.
-        VarType siblingType = null;
-        for (Map.Entry<VarVersionPair, VarType> other : mapExprentMinTypes.entrySet()) {
-          if (other.getKey().var == paar.var && other.getKey().version != paar.version) {
-            VarType ot = other.getValue();
-            if (ot.type == CodeType.OBJECT && !"java/lang/Object".equals(ot.value)) {
-              if (siblingType == null || siblingType.value.equals(ot.value)) {
-                siblingType = ot;
-              } else {
-                siblingType = null; // conflicting types, use Object
-                break;
-              }
-            }
-          }
-        }
-        mapExprentMinTypes.put(paar, siblingType != null ? siblingType : VarType.VARTYPE_OBJECT);
+        mapExprentMinTypes.put(paar, VarType.VARTYPE_OBJECT);
       }
     }
   }

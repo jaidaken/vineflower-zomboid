@@ -9,6 +9,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.DirectGraph;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.struct.StructClass;
+import org.jetbrains.java.decompiler.struct.StructContext;
 import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
@@ -703,6 +704,82 @@ public class VarTypeProcessor {
             collectionType.value, null, genericArgs, GenericType.WILDCARD_NO);
         upgrades.put(varIndex, gt);
       }
+    }
+  }
+
+  /**
+   * RTF post-pass: widen variable types to match bytecode method receiver classes.
+   * When a variable is typed as FileInputStream but the bytecode calls InputStream.read(),
+   * javac emits FileInputStream.read() which differs from the original InputStream.read().
+   * Widen the variable type to match the receiver from the original bytecode.
+   */
+  public static void widenToReceiverTypes(Statement root, VarProcessor varProc, StructMethod mt) {
+    Map<VarVersionPair, VarType> minTypes = varProc.getVarVersions().getTypeProcessor().getMapExprentMinTypes();
+    StructContext ctx = DecompilerContext.getStructContext();
+
+    Map<Integer, Set<String>> varReceiverClasses = new HashMap<>();
+    collectReceiverClasses(root, varReceiverClasses);
+
+    // Skip 'this' (var 0) in non-static methods
+    int thisVarIndex = !mt.hasModifier(CodeConstants.ACC_STATIC) ? 0 : -1;
+
+    for (Map.Entry<Integer, Set<String>> entry : varReceiverClasses.entrySet()) {
+      int varIndex = entry.getKey();
+      if (varIndex == thisVarIndex) continue;
+
+      VarVersionPair pair = new VarVersionPair(varIndex, 0);
+      VarType currentType = minTypes.get(pair);
+      if (currentType == null || currentType.type != CodeType.OBJECT || currentType.value == null) continue;
+
+      // Only widen if NO receiver uses the current type.
+      // If any receiver matches the current type, the variable is used as-is somewhere.
+      Set<String> receivers = entry.getValue();
+      if (receivers.contains(currentType.value)) continue;
+
+      String widenTo = null;
+      for (String receiver : receivers) {
+        if (!ctx.instanceOf(currentType.value, receiver)) { widenTo = null; break; }
+        if (widenTo == null) {
+          widenTo = receiver;
+        } else if (!widenTo.equals(receiver)) {
+          if (ctx.instanceOf(widenTo, receiver)) widenTo = receiver;
+          else if (!ctx.instanceOf(receiver, widenTo)) { widenTo = null; break; }
+        }
+      }
+
+      if (widenTo != null) {
+        minTypes.put(pair, new VarType(CodeType.OBJECT, currentType.arrayDim, widenTo));
+      }
+    }
+  }
+
+  private static void collectReceiverClasses(Statement stat, Map<Integer, Set<String>> varReceiverClasses) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        collectReceiverClassesExpr(expr, varReceiverClasses);
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      collectReceiverClassesExpr(expr, varReceiverClasses);
+    }
+    for (Statement st : stat.getStats()) {
+      collectReceiverClasses(st, varReceiverClasses);
+    }
+  }
+
+  private static void collectReceiverClassesExpr(Exprent expr, Map<Integer, Set<String>> varReceiverClasses) {
+    if (expr instanceof InvocationExprent) {
+      InvocationExprent invoc = (InvocationExprent) expr;
+      Exprent inst = invoc.getInstance();
+      if (inst instanceof VarExprent) {
+        String receiver = invoc.getClassname();
+        if (receiver != null) {
+          varReceiverClasses.computeIfAbsent(((VarExprent) inst).getIndex(), k -> new HashSet<>()).add(receiver);
+        }
+      }
+    }
+    for (Exprent sub : expr.getAllExprents()) {
+      collectReceiverClassesExpr(sub, varReceiverClasses);
     }
   }
 }
