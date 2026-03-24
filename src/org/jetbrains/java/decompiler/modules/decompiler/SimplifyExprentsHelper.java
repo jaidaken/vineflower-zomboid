@@ -210,6 +210,20 @@ public class SimplifyExprentsHelper {
           res = true;
           continue;
         }
+      } else {
+        // RTF mode: selectively allow post-increment for array index patterns.
+        // Pattern: copy = idx; ++idx; arr[copy] = val  (isIPPorIMM after PPandMMHelper)
+        //     or:  copy = idx; idx = copy + 1; arr[copy] = val  (isIPPorIMM2)
+        // Safe when the copy variable is a stack var used only as an array index,
+        // because stack vars won't be incorrectly merged with real vars during
+        // version merging (see FIXME in VarVersionsProcessor.java).
+        if (isRTFSafePostIncrement(current, next, list, index)) {
+          if (isIPPorIMM(current, next) || isIPPorIMM2(current, next)) {
+            list.remove(index + 1);
+            res = true;
+            continue;
+          }
+        }
       }
 
       // assignment on stack
@@ -641,6 +655,99 @@ public class SimplifyExprentsHelper {
     return false;
   }
 
+  /**
+   * Checks whether the isIPPorIMM / isIPPorIMM2 pattern is safe to apply in RTF mode.
+   * Safe when: the copy variable is a stack var and is used only as an array index
+   * in the expression that follows the two-statement increment pattern.
+   *
+   * Matches two shapes (both after PPandMMHelper may or may not have run):
+   *   copy = idx; ++idx;          arr[copy] = val   (isIPPorIMM pattern)
+   *   copy = idx; idx = copy + 1; arr[copy] = val   (isIPPorIMM2 pattern)
+   *
+   * Stack vars are never merged with real vars, so the FIXME bug in VarVersionsProcessor
+   * (where variable merging after inlining corrupts values) cannot occur.
+   */
+  private static boolean isRTFSafePostIncrement(Exprent first, Exprent second, List<Exprent> list, int index) {
+    if (!(first instanceof AssignmentExprent af)) {
+      return false;
+    }
+
+    // The copy variable must be a stack variable
+    if (!(af.getLeft() instanceof VarExprent copyVar) || !copyVar.isStack()) {
+      return false;
+    }
+
+    // Verify that the second statement is part of the increment pattern:
+    // either a PPI/MMI FunctionExprent (isIPPorIMM) or an AssignmentExprent (isIPPorIMM2)
+    boolean isIPPorIMMPattern = second instanceof FunctionExprent fn
+        && (fn.getFuncType() == FunctionType.MMI || fn.getFuncType() == FunctionType.PPI)
+        && fn.getLstOperands().get(0).equals(af.getRight());
+
+    boolean isIPPorIMM2Pattern = second instanceof AssignmentExprent as2
+        && as2.getRight() instanceof FunctionExprent fn2
+        && (fn2.getFuncType() == FunctionType.ADD || fn2.getFuncType() == FunctionType.SUB)
+        && af.getRight().equals(as2.getLeft());
+
+    if (!isIPPorIMMPattern && !isIPPorIMM2Pattern) {
+      return false;
+    }
+
+    // There must be a following expression that uses the copy var as an array index
+    if (index + 2 >= list.size()) {
+      return false;
+    }
+
+    Exprent following = list.get(index + 2);
+    return isVarUsedOnlyAsArrayIndex(copyVar, following);
+  }
+
+  /**
+   * Checks that a variable appears in the expression tree ONLY as the index of an ArrayExprent,
+   * and appears at least once.
+   */
+  private static boolean isVarUsedOnlyAsArrayIndex(VarExprent var, Exprent expr) {
+    boolean[] found = {false};
+    if (!checkVarAsArrayIndexOnly(var, expr, null, found)) {
+      return false;
+    }
+    return found[0];
+  }
+
+  /**
+   * Recursively checks that every occurrence of var in the expression tree is used
+   * as the index of an ArrayExprent. Returns false if the var appears in a non-index position.
+   */
+  private static boolean checkVarAsArrayIndexOnly(VarExprent var, Exprent expr, Exprent parent, boolean[] found) {
+    if (expr instanceof VarExprent ve) {
+      if (ve.getIndex() == var.getIndex() && ve.getVersion() == var.getVersion()) {
+        // This var matches - check that its parent is an ArrayExprent and this var is the index
+        if (parent instanceof ArrayExprent arrParent && arrParent.getIndex() == expr) {
+          found[0] = true;
+          return true;
+        }
+        // Var used in a non-array-index position
+        return false;
+      }
+      return true;
+    }
+
+    if (expr instanceof ArrayExprent arrExpr) {
+      // Check the array sub-expression normally (var must not appear there)
+      if (!checkVarAsArrayIndexOnly(var, arrExpr.getArray(), arrExpr, found)) {
+        return false;
+      }
+      // Check the index sub-expression with this ArrayExprent as parent
+      return checkVarAsArrayIndexOnly(var, arrExpr.getIndex(), arrExpr, found);
+    }
+
+    // For all other expression types, recurse into sub-expressions
+    for (Exprent sub : expr.getAllExprents()) {
+      if (!checkVarAsArrayIndexOnly(var, sub, expr, found)) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   // Inlines PPI into the next expression, to make stack var simplificiation easier
   //
