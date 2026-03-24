@@ -935,7 +935,15 @@ public class ClassWriter implements StatementWriter {
             }
           }
           if (!assignedInInit) {
-            fieldFlags &= ~CodeConstants.ACC_FINAL;
+            // Don't strip final if the field has a ConstantValue attribute.
+            // These fields (static final primitives/Strings) store their value
+            // in the class file attribute, not in <clinit>. Keeping final ensures
+            // javac uses ConstantValue instead of generating a <clinit> method.
+            boolean hasConstantValue = isStatic
+                && fd.getAttribute(StructGeneralAttribute.ATTRIBUTE_CONSTANT_VALUE) != null;
+            if (!hasConstantValue) {
+              fieldFlags &= ~CodeConstants.ACC_FINAL;
+            }
           }
         }
       }
