@@ -662,11 +662,11 @@ public class FunctionExprent extends Exprent {
         rightOp = rtfCastObjectOperand(right, rightOp, left.getExprType());
         // RTF: && and || require boolean operands, but merged int/boolean vars may be int
         if (funcType == FunctionType.BOOLEAN_AND || funcType == FunctionType.BOOLEAN_OR) {
-          if (left instanceof VarExprent && left.getExprType().typeFamily == TypeFamily.INTEGER) {
-            leftOp.append(" != 0");
+          if (left.getExprType().typeFamily == TypeFamily.INTEGER) {
+            leftOp = new TextBuffer().append("(").append(leftOp).append(" != 0)");
           }
-          if (right instanceof VarExprent && right.getExprType().typeFamily == TypeFamily.INTEGER) {
-            rightOp.append(" != 0");
+          if (right.getExprType().typeFamily == TypeFamily.INTEGER) {
+            rightOp = new TextBuffer().append("(").append(rightOp).append(" != 0)");
           }
         }
       }

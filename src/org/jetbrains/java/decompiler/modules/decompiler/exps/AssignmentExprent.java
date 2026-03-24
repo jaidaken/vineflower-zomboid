@@ -17,6 +17,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructField;
 import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericClassDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericMethodDescriptor;
@@ -311,6 +312,23 @@ public class AssignmentExprent extends Exprent {
                   }
                 }
               }
+            }
+          }
+
+          // RTF: boolean-to-int assignment fix. JVM uses int for boolean locals,
+          // so the type system allows boolean = isPlayerAlive() into an int var.
+          // But Java source doesn't allow assigning boolean to int directly.
+          // Wrap boolean RHS with ternary: (expr) ? 1 : 0
+          VarType rhsType = right.getExprType();
+          if (leftType.typeFamily == TypeFamily.INTEGER
+              && !leftType.equals(VarType.VARTYPE_BOOLEAN)
+              && rhsType.type == CodeType.BOOLEAN) {
+            String rendered = buffer.toString();
+            int eqIdx = rendered.lastIndexOf("= ");
+            if (eqIdx >= 0) {
+              String afterEq = rendered.substring(eqIdx + 2).trim();
+              buffer.setLength(eqIdx + 2);
+              buffer.append("(").append(afterEq).append(") ? 1 : 0");
             }
           }
         }

@@ -1675,7 +1675,8 @@ public class InvocationExprent extends Exprent {
           continue; // always consider method references as matching
         }
         if (!missed.get(i)) {
-          if (!md.params[i].equals(ptype) && !isWideningConversion(ptype, md.params[i])) {
+          if (!md.params[i].equals(ptype) && !isWideningConversion(ptype, md.params[i])
+              && !(ptype.type == CodeType.NULL && md.params[i].type == CodeType.OBJECT)) {
             failed = true;
             break;
           }
