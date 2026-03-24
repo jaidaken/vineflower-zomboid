@@ -518,7 +518,9 @@ public class VarTypeProcessor {
       AssignmentExprent assign = (AssignmentExprent) expr;
       if (assign.getRight() instanceof VarExprent) {
         VarExprent rhsVar = (VarExprent) assign.getRight();
-        VarType rhsType = getMinType(rhsVar, minTypes);
+        VarVersionPair rhsPair = rhsVar.getVarVersionPair();
+        VarType rhsType = minTypes.get(rhsPair);
+        if (rhsType == null) rhsType = minTypes.get(new VarVersionPair(rhsVar.getIndex(), 0));
         if (rhsType != null && "java/lang/Object".equals(rhsType.value)) {
           VarType lhsType = assign.getLeft().getExprType();
           if (lhsType.typeFamily == TypeFamily.OBJECT

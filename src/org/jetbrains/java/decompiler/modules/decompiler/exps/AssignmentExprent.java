@@ -20,6 +20,7 @@ import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericClassDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericMethodDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericType;
 import org.jetbrains.java.decompiler.util.InterpreterUtil;
@@ -319,10 +320,19 @@ public class AssignmentExprent extends Exprent {
           // so the type system allows boolean = isPlayerAlive() into an int var.
           // But Java source doesn't allow assigning boolean to int directly.
           // Wrap boolean RHS with ternary: (expr) ? 1 : 0
+          // Check both expression type AND method descriptor return type, since
+          // type inference may have widened boolean to int to match the LHS.
           VarType rhsType = right.getExprType();
+          boolean rhsIsBoolean = rhsType.type == CodeType.BOOLEAN;
+          if (!rhsIsBoolean && right instanceof InvocationExprent) {
+            MethodDescriptor md = ((InvocationExprent) right).getDescriptor();
+            if (md != null && md.ret.type == CodeType.BOOLEAN) {
+              rhsIsBoolean = true;
+            }
+          }
           if (leftType.typeFamily == TypeFamily.INTEGER
               && !leftType.equals(VarType.VARTYPE_BOOLEAN)
-              && rhsType.type == CodeType.BOOLEAN) {
+              && rhsIsBoolean) {
             String rendered = buffer.toString();
             int eqIdx = rendered.lastIndexOf("= ");
             if (eqIdx >= 0) {
