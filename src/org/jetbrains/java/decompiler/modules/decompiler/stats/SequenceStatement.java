@@ -262,6 +262,36 @@ public class SequenceStatement extends Statement {
       }
     }
 
+    // RTF: while(true) with try-finally in the body is an unconditional exit.
+    // The finally handler's rethrow path creates a spurious successor edge out of
+    // the loop, but Java semantics say code after while(true) is unreachable.
+    // Only trigger when the loop body contains a try-finally to avoid broad regressions.
+    if (stat instanceof DoStatement
+        && ((DoStatement) stat).getLooptype() == DoStatement.Type.INFINITE
+        && bodyContainsTryFinally(stat)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private static boolean bodyContainsTryFinally(Statement stat) {
+    if (stat instanceof CatchAllStatement && ((CatchAllStatement) stat).isFinally()) {
+      return true;
+    }
+    for (Statement child : stat.getStats()) {
+      if (child instanceof CatchAllStatement && ((CatchAllStatement) child).isFinally()) {
+        return true;
+      }
+      // Check one level deeper for try-catch wrapping try-finally
+      if (child instanceof CatchStatement || child instanceof SequenceStatement) {
+        for (Statement grandchild : child.getStats()) {
+          if (grandchild instanceof CatchAllStatement && ((CatchAllStatement) grandchild).isFinally()) {
+            return true;
+          }
+        }
+      }
+    }
     return false;
   }
 

@@ -26,6 +26,7 @@ import org.jetbrains.java.decompiler.struct.consts.LinkConstant;
 import org.jetbrains.java.decompiler.struct.consts.PooledConstant;
 import org.jetbrains.java.decompiler.struct.consts.PrimitiveConstant;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericType;
 import org.jetbrains.java.decompiler.util.TextUtil;
@@ -1180,7 +1181,22 @@ public class ExprProcessor implements CodeConstants {
     }
 
     if (cast) {
-      buffer.append('(').appendCastTypeName(leftType).append(')');
+      // RTF: Java does not allow (boolean)intExpr. Replace with intExpr != 0.
+      if (DecompilerContext.isRoundtripFidelity()
+          && leftType.equals(VarType.VARTYPE_BOOLEAN)
+          && rightType.typeFamily == TypeFamily.INTEGER) {
+        if (exprent instanceof ConstExprent) {
+          // Constants 0/1: suppress cast, emit bare value (int var = 1 is valid)
+          cast = false;
+        } else {
+          // Non-constants: emit expr != 0 instead of (boolean)expr
+          buffer.append(exprent.toJava(indent)).append(" != 0");
+          return true;
+        }
+      }
+      if (cast) {
+        buffer.append('(').appendCastTypeName(leftType).append(')');
+      }
     }
 
     if (castLambda) {

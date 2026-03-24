@@ -1647,7 +1647,8 @@ public class InvocationExprent extends Exprent {
               if (!md2.params[j].equals(ptype)
                   && !isWideningConversion(ptype, md2.params[j])
                   && !(md2.params[j].type == CodeType.OBJECT && ptype.type == CodeType.OBJECT
-                       && DecompilerContext.getStructContext().instanceOf(ptype.value, md2.params[j].value))) {
+                       && DecompilerContext.getStructContext().instanceOf(ptype.value, md2.params[j].value))
+                  && !(md2.params[j].type == CodeType.OBJECT && ptype.type == CodeType.NULL)) {
                 allMatch = false;
                 break;
               }

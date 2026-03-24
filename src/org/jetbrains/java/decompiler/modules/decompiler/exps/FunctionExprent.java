@@ -14,6 +14,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.CheckTypesResult;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericType;
 import org.jetbrains.java.decompiler.struct.match.MatchEngine;
@@ -659,6 +660,15 @@ public class FunctionExprent extends Exprent {
       if (DecompilerContext.isRoundtripFidelity()) {
         leftOp = rtfCastObjectOperand(left, leftOp, right.getExprType());
         rightOp = rtfCastObjectOperand(right, rightOp, left.getExprType());
+        // RTF: && and || require boolean operands, but merged int/boolean vars may be int
+        if (funcType == FunctionType.BOOLEAN_AND || funcType == FunctionType.BOOLEAN_OR) {
+          if (left instanceof VarExprent && left.getExprType().typeFamily == TypeFamily.INTEGER) {
+            leftOp.append(" != 0");
+          }
+          if (right instanceof VarExprent && right.getExprType().typeFamily == TypeFamily.INTEGER) {
+            rightOp.append(" != 0");
+          }
+        }
       }
       if (!disableNewlineGroupCreation) {
         buf.pushNewlineGroup(indent, 1);

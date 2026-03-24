@@ -754,41 +754,25 @@ public final class IfPatternMatchProcessor {
    * If the variable escapes the if-block scope, pattern matching is unsafe.
    */
   private static boolean isVarUsedAfterBranch(VarVersionPair var, Statement branch) {
-    // Find the parent sequence containing the branch
+    // Walk up the full ancestor chain, checking sibling statements at each level
+    Statement current = branch;
     Statement parent = branch.getParent();
-    if (parent == null) return false;
-
-    // Walk siblings after the branch in the parent
-    boolean foundBranch = false;
-    for (Statement sibling : parent.getStats()) {
-      if (sibling == branch) {
-        foundBranch = true;
-        continue;
-      }
-      if (foundBranch) {
-        if (containsVar(sibling, var.var)) {
-          return true;
-        }
-      }
-    }
-
-    // Also check the parent's parent (the variable might be used at a higher scope)
-    Statement grandparent = parent.getParent();
-    if (grandparent != null) {
-      boolean foundParent = false;
-      for (Statement sibling : grandparent.getStats()) {
-        if (sibling == parent) {
-          foundParent = true;
+    while (parent != null) {
+      boolean foundCurrent = false;
+      for (Statement sibling : parent.getStats()) {
+        if (sibling == current) {
+          foundCurrent = true;
           continue;
         }
-        if (foundParent) {
+        if (foundCurrent) {
           if (containsVar(sibling, var.var)) {
             return true;
           }
         }
       }
+      current = parent;
+      parent = parent.getParent();
     }
-
     return false;
   }
 
