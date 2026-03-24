@@ -522,6 +522,27 @@ public class ClassWriter implements StatementWriter {
         }
       }
 
+      // RTF: collect lambda method names referenced by bootstrap methods.
+      // Orphaned lambdas (synthetic lambda$ methods with no bootstrap reference)
+      // should be emitted in RTF mode to preserve class structure.
+      Set<String> bootstrapLambdaNames = null;
+      if (DecompilerContext.isRoundtripFidelity()) {
+        bootstrapLambdaNames = new HashSet<>();
+        StructBootstrapMethodsAttribute bsm = cl.getAttribute(StructGeneralAttribute.ATTRIBUTE_BOOTSTRAP_METHODS);
+        if (bsm != null) {
+          for (int bi = 0; bi < bsm.getMethodsNumber(); bi++) {
+            for (PooledConstant arg : bsm.getMethodArguments(bi)) {
+              if (arg instanceof LinkConstant) {
+                String name = ((LinkConstant) arg).elementname;
+                if (name != null && name.startsWith("lambda$")) {
+                  bootstrapLambdaNames.add(name);
+                }
+              }
+            }
+          }
+        }
+      }
+
       // methods
       VBStyleCollection<StructMethod, String> methods = cl.getMethods();
       for (int i = 0; i < methods.size(); i++) {
@@ -529,6 +550,12 @@ public class ClassWriter implements StatementWriter {
         boolean hide = mt.isSynthetic() && DecompilerContext.getOption(IFernflowerPreferences.REMOVE_SYNTHETIC) ||
                        mt.hasModifier(CodeConstants.ACC_BRIDGE) && DecompilerContext.getOption(IFernflowerPreferences.REMOVE_BRIDGE) ||
                        wrapper.getHiddenMembers().contains(InterpreterUtil.makeUniqueKey(mt.getName(), mt.getDescriptor()));
+        // RTF: keep orphaned lambda methods (synthetic lambda$ with no bootstrap reference)
+        if (hide && bootstrapLambdaNames != null
+            && mt.getName().startsWith("lambda$")
+            && !bootstrapLambdaNames.contains(mt.getName())) {
+          hide = false;
+        }
         if (hide) continue;
 
         TextBuffer methodBuffer = new TextBuffer();
