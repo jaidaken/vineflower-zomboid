@@ -1423,6 +1423,34 @@ public class ClassWriter implements StatementWriter {
             if (RecordHelper.isHiddenRecordMethod(cl, mt, root)) {
               hideMethod = true;
             } else {
+              // RTF: emit orphaned anonymous class instantiations at the top of the method.
+              // These are dead-code artifacts whose .class files exist but were never instantiated.
+              // Emitting them here preserves anonymous class $N numbering for javac.
+              if (methodWrapper.rtfOrphanAnonymousClasses != null) {
+                for (ClassesProcessor.ClassNode orphan : methodWrapper.rtfOrphanAnonymousClasses) {
+                  buffer.appendIndent(indent + 1);
+                  buffer.append("new ");
+                  // Use generic signature if available (e.g. Comparator<File> instead of raw Comparator)
+                  boolean typeWritten = false;
+                  if (orphan.getWrapper() != null) {
+                    var sig = orphan.getWrapper().getClassStruct().getSignature();
+                    if (sig != null) {
+                      if (!sig.superinterfaces.isEmpty()) {
+                        buffer.appendCastTypeName(sig.superinterfaces.get(0));
+                      } else {
+                        buffer.appendCastTypeName(sig.superclass);
+                      }
+                      typeWritten = true;
+                    }
+                  }
+                  if (!typeWritten) {
+                    buffer.appendCastTypeName(orphan.anonymousClassType);
+                  }
+                  buffer.append("()");
+                  new ClassWriter().writeClass(orphan, buffer, indent + 1);
+                  buffer.append(";").appendLineSeparator();
+                }
+              }
               TextBuffer code = root.toJava(indent + 1);
               code.addBytecodeMapping(root.getDummyExit().bytecode);
               hideMethod = code.length() == 0 && (clInit || dInit || hideConstructor(node, init, throwsExceptions, paramCount, flags));

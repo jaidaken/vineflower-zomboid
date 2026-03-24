@@ -2,6 +2,7 @@
 package org.jetbrains.java.decompiler.main.rels;
 
 import org.jetbrains.java.decompiler.main.collectors.CounterContainer;
+import org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.DirectGraph;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.FlattenStatementsHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
@@ -26,6 +27,8 @@ public class MethodWrapper {
   public Throwable decompileError;
   public Set<String> commentLines = null;
   public boolean addErrorComment = false;
+  // RTF: orphaned anonymous classes to inject at the top of this method body during rendering
+  public List<ClassNode> rtfOrphanAnonymousClasses;
 
   public MethodWrapper(RootStatement root, VarProcessor varproc, StructMethod methodStruct, StructClass classStruct, CounterContainer counter) {
     this.root = root;

@@ -901,6 +901,16 @@ public class InvocationExprent extends Exprent {
               && DecompilerContext.getStructContext().instanceOf(rightType.value, JAVA_NIO_BUFFER.value)) {
               buf.append("((").appendCastTypeName(JAVA_NIO_BUFFER).append(")").append(res).append(")");
           }
+          // RTF: cast instance to the bytecode receiver type when the variable's declared type
+          // is a subclass of the receiver. This ensures javac emits the original receiver class
+          // in the INVOKEVIRTUAL/INVOKEINTERFACE instruction (e.g. InputStream.read vs FileInputStream.read).
+          else if (DecompilerContext.isRoundtripFidelity()
+              && !isInstanceThis
+              && rightType.value != null && classname != null
+              && !rightType.value.equals(classname)
+              && DecompilerContext.getStructContext().instanceOf(rightType.value, classname)) {
+            appendInstCast(buf, leftType, res);
+          }
           else {
             buf.append(res);
           }

@@ -303,26 +303,37 @@ public class VarDefinitionHelper {
         // default initialization via the defaultInit flag to avoid AST issues
         // with downstream passes (e.g., setNonFinal casting to VarExprent).
         if (DecompilerContext.isRoundtripFidelity()) {
-          // RTF: skip = null initialization when possible — it produces ACONST_NULL + ASTORE
-          // that the original bytecode doesn't have. Check if the variable's next use after
-          // the definition point is an assignment (definitely assigned before use).
-          boolean needsNullInit = false;
-          if (varType.type == CodeType.OBJECT || varType.arrayDim > 0) {
-            // Check if the variable is used (read) before being assigned in any code path
-            // from this definition point. If yes, we need = null.
-            needsNullInit = isUsedBeforeAssigned(stat, index, first);
+          // RTF: skip default initialization (= null / = 0 / = 0.0 / = false) when the
+          // variable is definitely assigned in all branches before any read. Default
+          // initializers produce extra bytecode (ACONST_NULL + ASTORE, DCONST_0 + DSTORE,
+          // etc.) that breaks store-load normalization in the bytecode comparator.
+          boolean needsInit = isUsedBeforeAssigned(stat, index, first);
+          // Debug: trace var 59 in OpenSimplexNoise eval(DDDD)D
+          if (mt.getName().equals("eval") && mt.getDescriptor().equals("(DDDD)D") && needsInit && index == 59) {
+            try {
+              debugWriter = new java.io.FileWriter("/tmp/rtf_varinit_debug.log", true);
+              debugWriter.write("=== var " + index + " in " + mt.getName() + mt.getDescriptor() + " ===\n");
+              debugWriter.write("stat.type=" + stat.type + " children=" + stat.getStats().size() + "\n");
+              // Re-run the analysis with debug enabled
+              boolean debugResult = !isDefinitelyAssigned(stat, index);
+              debugWriter.write("RESULT: needsInit=" + debugResult + "\n\n");
+              debugWriter.close();
+              debugWriter = null;
+            } catch (Exception ignored) { debugWriter = null; }
           }
-          if (needsNullInit) {
-            AssignmentExprent assign = new AssignmentExprent(
-              var,
-              new ConstExprent(VarType.VARTYPE_NULL, null, null),
-              null
-            );
-            lst.add(addindex, assign);
-          } else {
-            if (varType.type != CodeType.OBJECT && varType.arrayDim == 0) {
+          if (needsInit) {
+            if (varType.type == CodeType.OBJECT || varType.arrayDim > 0) {
+              AssignmentExprent assign = new AssignmentExprent(
+                var,
+                new ConstExprent(VarType.VARTYPE_NULL, null, null),
+                null
+              );
+              lst.add(addindex, assign);
+            } else {
               var.setDefaultInit(true);
+              lst.add(addindex, var);
             }
+          } else {
             lst.add(addindex, var);
           }
         } else if (varType.type == CodeType.OBJECT || varType.arrayDim > 0) {
@@ -396,35 +407,213 @@ public class VarDefinitionHelper {
 
   /**
    * RTF: check if a variable is read before being assigned on any code path
-   * from the definition point. Conservative: returns true (needs null-init)
-   * unless the variable is clearly assigned before any read.
+   * from the definition point. Returns true if null-init is needed.
    */
   private boolean isUsedBeforeAssigned(Statement defStat, int varIndex, Statement firstBlock) {
-    // If the first block has exprents, check if the first occurrence of the var is an assignment
-    List<Exprent> exprents = (firstBlock != null && firstBlock.getExprents() != null)
-        ? firstBlock.getExprents()
-        : (defStat.getExprents() != null ? defStat.getExprents() : null);
+    // The definition will be placed in firstBlock (or defStat). We need to check
+    // the code AFTER the definition point. Since the definition is placed before
+    // any use of the variable, the relevant code is the rest of the statement tree
+    // from the definition's parent downward.
+    return !isDefinitelyAssigned(defStat, varIndex);
+  }
 
-    if (exprents != null) {
-      for (Exprent expr : exprents) {
-        // Check if this expression assigns to the variable
+  /**
+   * RTF: check if a variable is definitely assigned before any read on all code
+   * paths through the given statement. Handles linear code, if-else branches,
+   * and sequences.
+   */
+  // Debug file for tracing - set to non-null to enable
+  private static volatile java.io.FileWriter debugWriter = null;
+
+  private static boolean isDefinitelyAssigned(Statement stat, int varIndex) {
+    return isDefinitelyAssignedImpl(stat, varIndex, 0);
+  }
+
+  private static boolean isDefinitelyAssignedImpl(Statement stat, int varIndex, int depth) {
+    String indent = "  ".repeat(depth);
+
+    // For basic blocks: check exprents linearly
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (exprAssignsVar(expr, varIndex)) {
+          debugLog(indent + "ASSIGNED in basic block");
+          return true;
+        }
+        if (exprReadsVar(expr, varIndex)) {
+          debugLog(indent + "READ before assign in basic block");
+          return false;
+        }
+      }
+      debugLog(indent + "not found in basic block (" + stat.getExprents().size() + " exprents)");
+      return false;
+    }
+
+    // For sequences: check children in order
+    if (stat.type == Statement.StatementType.SEQUENCE) {
+      debugLog(indent + "SEQUENCE with " + stat.getStats().size() + " children");
+      for (int i = 0; i < stat.getStats().size(); i++) {
+        Statement child = stat.getStats().get(i);
+        Boolean result = checkStatementForVarImpl(child, varIndex, depth + 1);
+        if (result != null) {
+          debugLog(indent + "  child[" + i + "] " + child.type + " => " + result);
+          return result;
+        }
+        debugLog(indent + "  child[" + i + "] " + child.type + " => null (not found)");
+      }
+      debugLog(indent + "SEQUENCE: var not found in any child");
+      return false;
+    }
+
+    // For if-else: variable must be assigned in ALL branches
+    if (stat.type == Statement.StatementType.IF) {
+      IfStatement ifStat = (IfStatement) stat;
+      debugLog(indent + "IF iftype=" + ifStat.iftype + " hasElse=" + (ifStat.getElsestat() != null));
+
+      if (ifStat.getFirst() != null) {
+        Boolean result = checkStatementForVarImpl(ifStat.getFirst(), varIndex, depth + 1);
+        if (result != null) {
+          debugLog(indent + "  head => " + result);
+          return result;
+        }
+      }
+
+      if (ifStat.iftype == IfStatement.IFTYPE_IFELSE
+          && ifStat.getIfstat() != null && ifStat.getElsestat() != null) {
+        debugLog(indent + "  checking if-body (" + ifStat.getIfstat().type + "):");
+        boolean ifResult = isDefinitelyAssignedImpl(ifStat.getIfstat(), varIndex, depth + 2);
+        debugLog(indent + "  if-body => " + ifResult);
+        debugLog(indent + "  checking else-body (" + ifStat.getElsestat().type + "):");
+        boolean elseResult = isDefinitelyAssignedImpl(ifStat.getElsestat(), varIndex, depth + 2);
+        debugLog(indent + "  else-body => " + elseResult);
+        return ifResult && elseResult;
+      }
+      debugLog(indent + "IF: not IFELSE or missing branches");
+      return false;
+    }
+
+    if (stat.type == Statement.StatementType.ROOT && stat.getFirst() != null) {
+      return isDefinitelyAssignedImpl(stat.getFirst(), varIndex, depth);
+    }
+
+    debugLog(indent + "unhandled type: " + stat.type);
+    return false;
+  }
+
+  private static Boolean checkStatementForVarImpl(Statement stat, int varIndex, int depth) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (exprAssignsVar(expr, varIndex)) {
+          return true;
+        }
+        if (exprReadsVar(expr, varIndex)) {
+          return false;
+        }
+      }
+      return null;
+    }
+    if (containsVar(stat, varIndex)) {
+      return isDefinitelyAssignedImpl(stat, varIndex, depth);
+    }
+    return null;
+  }
+
+  private static void debugLog(String msg) {
+    if (debugWriter != null) {
+      try { debugWriter.write(msg + "\n"); } catch (Exception ignored) {}
+    }
+  }
+
+  /**
+   * Check a statement for a variable. Returns true if definitely assigned,
+   * false if read before assigned, null if the variable is not referenced.
+   */
+  private static Boolean checkStatementForVar(Statement stat, int varIndex) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
         if (expr instanceof AssignmentExprent) {
           Exprent left = ((AssignmentExprent) expr).getLeft();
           if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) {
-            return false; // assigned before any read
+            return true;
           }
         }
-        // Check if this expression reads the variable
-        for (Exprent sub : expr.getAllExprents(true)) {
-          if (sub instanceof VarExprent && ((VarExprent) sub).getIndex() == varIndex) {
-            return true; // read before assigned
-          }
+        if (exprReadsVar(expr, varIndex)) {
+          return false;
+        }
+      }
+      return null; // not referenced in this block
+    }
+
+    // Compound statement: recurse
+    if (containsVar(stat, varIndex)) {
+      return isDefinitelyAssigned(stat, varIndex);
+    }
+    return null;
+  }
+
+  /** Check if any expression in a statement tree reads a variable. */
+  private static boolean containsVar(Statement stat, int varIndex) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (exprReadsVar(expr, varIndex)) return true;
+        if (expr instanceof AssignmentExprent) {
+          Exprent left = ((AssignmentExprent) expr).getLeft();
+          if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) return true;
         }
       }
     }
+    for (Statement child : stat.getStats()) {
+      if (containsVar(child, varIndex)) return true;
+    }
+    return false;
+  }
 
-    // Conservative: if we can't determine, assume it needs null-init
-    return true;
+  /** Check if an expression assigns to a variable (handles chained assignments like a = b = c). */
+  private static boolean exprAssignsVar(Exprent expr, int varIndex) {
+    if (!(expr instanceof AssignmentExprent)) return false;
+    AssignmentExprent assign = (AssignmentExprent) expr;
+    Exprent left = assign.getLeft();
+    if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) {
+      return true;
+    }
+    // Check chained assignment: a = b = value -> the right side is also an assignment
+    return exprAssignsVar(assign.getRight(), varIndex);
+  }
+
+  /** Check if an expression reads (not assigns) a variable. */
+  private static boolean exprReadsVar(Exprent expr, int varIndex) {
+    // For assignments: the left side is a write. Check if the right side reads the var.
+    // Handle chained assignments (a = b = c = value) by recursing into the right side.
+    if (expr instanceof AssignmentExprent) {
+      AssignmentExprent assign = (AssignmentExprent) expr;
+      Exprent left = assign.getLeft();
+      // If this assignment writes to our variable, the right side determines
+      // whether it's a pure write or involves a read
+      if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) {
+        return false; // assignment to var is not a read
+      }
+      // For non-var left sides (field access, array index), check left's sub-expressions
+      for (Exprent sub : left.getAllExprents(true)) {
+        if (sub instanceof VarExprent && ((VarExprent) sub).getIndex() == varIndex) return true;
+      }
+      // Recurse into right side (handles chained assignments like a = b = value)
+      return exprReadsVar(assign.getRight(), varIndex);
+    }
+    // For variable definitions (Type var;), skip - these are declarations, not reads
+    if (expr instanceof VarExprent) {
+      VarExprent ve = (VarExprent) expr;
+      if (ve.getIndex() == varIndex) {
+        return !ve.isDefinition();
+      }
+      return false;
+    }
+    // For all other expressions, check all sub-expressions
+    for (Exprent sub : expr.getAllExprents(true)) {
+      if (sub instanceof VarExprent && ((VarExprent) sub).getIndex() == varIndex
+          && !((VarExprent) sub).isDefinition()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private Statement findFirstBlock(Statement stat, int varindex) {

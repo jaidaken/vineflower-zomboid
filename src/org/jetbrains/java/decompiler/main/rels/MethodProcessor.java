@@ -333,7 +333,12 @@ public class MethodProcessor implements Runnable {
         continue;
       }
 
-      if (DecompilerContext.getOption(IFernflowerPreferences.PATTERN_MATCHING)) {
+      // RTF: skip pattern matching instanceof (e.g. `x instanceof Foo foo`) because
+      // it generates a local variable for the cast result. The original bytecode uses
+      // explicit casts like `((Foo)x).method()` which compiles to different bytecode
+      // (ALOAD this vs ALOAD pattern_var).
+      if (DecompilerContext.getOption(IFernflowerPreferences.PATTERN_MATCHING)
+          && !DecompilerContext.isRoundtripFidelity()) {
         if (cl.getVersion().hasIfPatternMatching()) {
           if (IfPatternMatchProcessor.matchInstanceof(root)) {
             decompileRecord.add("MatchIfInstanceof", root);
@@ -542,6 +547,7 @@ public class MethodProcessor implements Runnable {
     // the original branch direction.
     if (DecompilerContext.isRoundtripFidelity()) {
       fixGuardClauseInversions(root);
+      fixLambdaOrdering(root);
     }
 
     // RTF: final repair pass for orphaned label edges after all transformations.
@@ -638,6 +644,87 @@ public class MethodProcessor implements Runnable {
     // CFG/block ordering level rather than the expression level.
 
     ifStat.setRtfConditionFlipped(false);
+  }
+
+  /**
+   * RTF: fix lambda numbering by swapping if-else branches when the else-body
+   * contains lambda expressions with lower bytecode offsets than the if-body's
+   * lambdas. javac numbers lambdas by source encounter order, so the branch
+   * with the lower-offset lambdas must come first in source.
+   */
+  private static void fixLambdaOrdering(Statement stat) {
+    for (Statement child : new ArrayList<>(stat.getStats())) {
+      fixLambdaOrdering(child);
+    }
+
+    if (!(stat instanceof IfStatement)) return;
+    IfStatement ifStat = (IfStatement) stat;
+    if (ifStat.iftype != IfStatement.IFTYPE_IFELSE) return;
+
+    Statement ifBody = ifStat.getIfstat();
+    Statement elseBody = ifStat.getElsestat();
+    if (ifBody == null || elseBody == null) return;
+
+    // Collect the minimum lambda bytecode offset in each branch
+    int minIfOffset = getMinLambdaOffset(ifBody);
+    int minElseOffset = getMinLambdaOffset(elseBody);
+
+    // Only act if both branches have lambdas and else has lower offsets
+    if (minElseOffset < 0 || minIfOffset < 0) return;
+    if (minElseOffset >= minIfOffset) return;
+
+    // Swap bodies
+    ifStat.setIfstat(elseBody);
+    ifStat.setElsestat(ifBody);
+
+    // Swap edges
+    StatEdge tmpEdge = ifStat.getIfEdge();
+    ifStat.setIfEdge(ifStat.getElseEdge());
+    ifStat.setElseEdge(tmpEdge);
+
+    // Negate condition
+    IfExprent headExpr = ifStat.getHeadexprent();
+    Exprent negated = new FunctionExprent(
+      FunctionExprent.FunctionType.BOOL_NOT, headExpr.getCondition(), null);
+    Exprent simplified = SecondaryFunctionsHelper.propagateBoolNot(negated);
+    headExpr.setCondition(simplified != null ? simplified : negated);
+  }
+
+  /** Find the minimum bytecode offset of any lambda NewExprent in a statement tree. Returns -1 if none. */
+  private static int getMinLambdaOffset(Statement stat) {
+    int[] min = {Integer.MAX_VALUE};
+    collectLambdaOffsets(stat, min);
+    return min[0] == Integer.MAX_VALUE ? -1 : min[0];
+  }
+
+  private static void collectLambdaOffsets(Statement stat, int[] min) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        collectLambdaOffsetsFromExpr(expr, min);
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      collectLambdaOffsetsFromExpr(expr, min);
+    }
+    for (Statement child : stat.getStats()) {
+      collectLambdaOffsets(child, min);
+    }
+  }
+
+  private static void collectLambdaOffsetsFromExpr(Exprent expr, int[] min) {
+    List<Exprent> all = expr.getAllExprents(true);
+    all.add(expr);
+    for (Exprent e : all) {
+      if (e instanceof NewExprent) {
+        NewExprent ne = (NewExprent) e;
+        if (ne.isLambda() && ne.bytecode != null) {
+          int offset = ne.bytecode.nextSetBit(0);
+          if (offset >= 0 && offset < min[0]) {
+            min[0] = offset;
+          }
+        }
+      }
+    }
   }
 
   /**

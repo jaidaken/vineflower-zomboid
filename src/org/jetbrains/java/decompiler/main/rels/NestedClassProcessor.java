@@ -103,6 +103,13 @@ public class NestedClassProcessor {
       }
     }
 
+    // RTF: inject orphaned anonymous classes into method bodies to preserve $N numbering.
+    // An orphaned anonymous class has a .class file but no `new $N()` in any method body
+    // (dead code artifact). Without injection, later anonymous classes get misnumbered.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      injectOrphanedAnonymousClasses(node);
+    }
+
     for (ClassNode child : new ArrayList<>(node.nested)) {
       processClass(root, child);
     }
@@ -991,6 +998,160 @@ public class NestedClassProcessor {
     var.setClassDef(true);
 
     lst.add(addIndex, var);
+  }
+
+  /**
+   * RTF: Detect anonymous classes whose .class files exist but are never instantiated
+   * (orphaned dead-code artifacts). Inject a synthetic {@code new Interface() { ... };}
+   * expression into the method body that contains the next-numbered anonymous class,
+   * so javac assigns the correct $N number during recompilation.
+   */
+  private static void injectOrphanedAnonymousClasses(ClassNode node) {
+    if (node.getWrapper() == null) return;
+
+    // Collect ANONYMOUS children (not lambdas) keyed by their $N number.
+    // Only consider direct numeric suffixes (e.g. $2, $3), not named inner classes.
+    String parentPrefix = node.classStruct.qualifiedName + "$";
+    TreeMap<Integer, ClassNode> anonByNumber = new TreeMap<>();
+    for (ClassNode child : node.nested) {
+      if (child.type == ClassNode.Type.ANONYMOUS && child.lambdaInformation == null) {
+        int num = extractAnonymousNumber(child.classStruct.qualifiedName, parentPrefix);
+        if (num >= 0) {
+          anonByNumber.put(num, child);
+        }
+      }
+    }
+    if (anonByNumber.size() < 2) return;
+
+    // Find which anonymous class names appear in NewExprent in any method body.
+    // Only scan methods that have a decompiled root (skip errored methods).
+    Set<String> referenced = new HashSet<>();
+    for (MethodWrapper mw : node.getWrapper().getMethods()) {
+      if (mw.root != null && mw.decompileError == null) {
+        collectNewExprClassNames(mw.root, referenced);
+      }
+    }
+
+    // Identify orphans: anonymous children not referenced by any NewExprent AND
+    // that have a valid enclosing method declared in the class attributes.
+    List<Map.Entry<Integer, ClassNode>> orphans = new ArrayList<>();
+    for (Map.Entry<Integer, ClassNode> entry : anonByNumber.entrySet()) {
+      ClassNode child = entry.getValue();
+      if (!referenced.contains(child.classStruct.qualifiedName)
+          && child.enclosingMethod != null
+          && node.getWrapper().getMethods().getWithKey(child.enclosingMethod) != null) {
+        orphans.add(entry);
+      }
+    }
+    if (orphans.isEmpty()) return;
+
+    // For each orphan, inject into the method containing the next-numbered non-orphan
+    for (Map.Entry<Integer, ClassNode> orphanEntry : orphans) {
+      int orphanNum = orphanEntry.getKey();
+      ClassNode orphan = orphanEntry.getValue();
+
+      // Find the next-numbered non-orphan anonymous class
+      ClassNode nextNonOrphan = null;
+      for (Map.Entry<Integer, ClassNode> entry : anonByNumber.tailMap(orphanNum, false).entrySet()) {
+        if (referenced.contains(entry.getValue().classStruct.qualifiedName)) {
+          nextNonOrphan = entry.getValue();
+          break;
+        }
+      }
+      if (nextNonOrphan == null) continue;
+
+      // Find which method body instantiates the next non-orphan
+      String nextClassName = nextNonOrphan.classStruct.qualifiedName;
+      MethodWrapper targetMethod = null;
+      for (MethodWrapper mw : node.getWrapper().getMethods()) {
+        if (mw.root != null && mw.decompileError == null
+            && statementReferencesNewOfClass(mw.root, nextClassName)) {
+          targetMethod = mw;
+          break;
+        }
+      }
+      if (targetMethod == null || targetMethod.root == null) continue;
+
+      // Record the orphan injection target so ClassWriter can emit it at the text level.
+      // We avoid modifying the expression tree because injecting a NewExprent for an
+      // anonymous class that was never originally instantiated can cause downstream
+      // processing failures (e.g. variable resolution, type inference).
+      if (targetMethod.rtfOrphanAnonymousClasses == null) {
+        targetMethod.rtfOrphanAnonymousClasses = new ArrayList<>();
+      }
+      targetMethod.rtfOrphanAnonymousClasses.add(orphan);
+    }
+  }
+
+  /** Extract the numeric suffix from an anonymous class name (e.g. "Foo$3" -> 3). */
+  private static int extractAnonymousNumber(String qualifiedName, String parentPrefix) {
+    if (!qualifiedName.startsWith(parentPrefix)) return -1;
+    String suffix = qualifiedName.substring(parentPrefix.length());
+    // Only pure numeric suffixes are anonymous class numbers
+    if (suffix.isEmpty()) return -1;
+    for (int i = 0; i < suffix.length(); i++) {
+      if (!Character.isDigit(suffix.charAt(i))) return -1;
+    }
+    try {
+      return Integer.parseInt(suffix);
+    } catch (NumberFormatException e) {
+      return -1;
+    }
+  }
+
+  /** Collect all class names that appear as the type of a NewExprent in a statement tree. */
+  private static void collectNewExprClassNames(Statement stat, Set<String> classNames) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        collectNewExprClassNamesFromExpr(expr, classNames);
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      collectNewExprClassNamesFromExpr(expr, classNames);
+    }
+    for (Statement child : stat.getStats()) {
+      collectNewExprClassNames(child, classNames);
+    }
+  }
+
+  private static void collectNewExprClassNamesFromExpr(Exprent expr, Set<String> classNames) {
+    List<Exprent> all = expr.getAllExprents(true);
+    all.add(expr);
+    for (Exprent e : all) {
+      if (e instanceof NewExprent) {
+        VarType type = ((NewExprent) e).getNewType();
+        if (type.type == CodeType.OBJECT) {
+          classNames.add(type.value);
+        }
+      }
+    }
+  }
+
+  /** Check if a statement tree contains a NewExprent for a specific class. */
+  private static boolean statementReferencesNewOfClass(Statement stat, String className) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (exprReferencesNewOfClass(expr, className)) return true;
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      if (exprReferencesNewOfClass(expr, className)) return true;
+    }
+    for (Statement child : stat.getStats()) {
+      if (statementReferencesNewOfClass(child, className)) return true;
+    }
+    return false;
+  }
+
+  private static boolean exprReferencesNewOfClass(Exprent expr, String className) {
+    List<Exprent> all = expr.getAllExprents(true);
+    all.add(expr);
+    for (Exprent e : all) {
+      if (e instanceof NewExprent && className.equals(((NewExprent) e).getNewType().value)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static Statement findFirstBlock(Statement stat, Set<Statement> setStats) {
