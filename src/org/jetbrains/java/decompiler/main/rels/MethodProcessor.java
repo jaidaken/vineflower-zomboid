@@ -671,26 +671,57 @@ public class MethodProcessor implements Runnable {
     if (ifBody == null || elseBody == null) return;
 
     // Only swap when the else-body is a short terminating block
-    // and the if-body is significantly longer
+    // and the if-body is significantly longer.
     int ifSize = estimateInsnCount(ifBody);
     int elseSize = estimateInsnCount(elseBody);
 
     if (elseSize > 0 && elseSize <= 6 && ifSize > elseSize * 2 && isTerminating(elseBody)) {
-      // Swap: move the short return to if-body, main code to else-body
-      ifStat.setIfstat(elseBody);
-      ifStat.setElsestat(ifBody);
-
-      StatEdge tmpEdge = ifStat.getIfEdge();
-      ifStat.setIfEdge(ifStat.getElseEdge());
-      ifStat.setElseEdge(tmpEdge);
-
-      // Negate condition
-      IfExprent headExpr = ifStat.getHeadexprent();
-      Exprent negated = new FunctionExprent(
-        FunctionExprent.FunctionType.BOOL_NOT, headExpr.getCondition(), null);
-      Exprent simplified = SecondaryFunctionsHelper.propagateBoolNot(negated);
-      headExpr.setCondition(simplified != null ? simplified : negated);
+      swapIfElseBranches(ifStat);
     }
+  }
+
+  private static void swapIfElseBranches(IfStatement ifStat) {
+    Statement ifBody = ifStat.getIfstat();
+    Statement elseBody = ifStat.getElsestat();
+
+    ifStat.setIfstat(elseBody);
+    ifStat.setElsestat(ifBody);
+
+    StatEdge tmpEdge = ifStat.getIfEdge();
+    ifStat.setIfEdge(ifStat.getElseEdge());
+    ifStat.setElseEdge(tmpEdge);
+
+    IfExprent headExpr = ifStat.getHeadexprent();
+    Exprent negated = new FunctionExprent(
+      FunctionExprent.FunctionType.BOOL_NOT, headExpr.getCondition(), null);
+    Exprent simplified = SecondaryFunctionsHelper.propagateBoolNot(negated);
+    headExpr.setCondition(simplified != null ? simplified : negated);
+  }
+
+  /** Check if a statement is a simple terminating block (just return/throw with a constant or simple expression). */
+  private static boolean isSimpleTerminating(Statement stat) {
+    // Direct basic block with return/throw
+    if (stat.getExprents() != null) {
+      if (stat.getExprents().size() == 1) {
+        Exprent expr = stat.getExprents().get(0);
+        if (expr instanceof ExitExprent) {
+          // Simple return: return, return constant, return variable, return field
+          ExitExprent exit = (ExitExprent) expr;
+          if (exit.getValue() == null) return true; // void return
+          if (exit.getValue() instanceof ConstExprent) return true; // return 0, return null
+          if (exit.getValue() instanceof VarExprent) return true; // return var
+          if (exit.getValue() instanceof FieldExprent) return true; // return field
+          return false; // complex return expression
+        }
+      }
+      return false;
+    }
+    // Sequence ending in simple termination
+    if (stat.type == Statement.StatementType.SEQUENCE) {
+      List<Statement> stats = stat.getStats();
+      return !stats.isEmpty() && isSimpleTerminating(stats.get(stats.size() - 1));
+    }
+    return false;
   }
 
   /** Estimate the bytecode instruction count of a statement (rough). */
