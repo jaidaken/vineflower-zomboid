@@ -547,6 +547,7 @@ public class MethodProcessor implements Runnable {
     // the original branch direction.
     if (DecompilerContext.isRoundtripFidelity()) {
       fixGuardClauseInversions(root);
+      fixGuardClauseLayout(root);
       fixLambdaOrdering(root);
     }
 
@@ -644,6 +645,86 @@ public class MethodProcessor implements Runnable {
     // CFG/block ordering level rather than the expression level.
 
     ifStat.setRtfConditionFlipped(false);
+  }
+
+  /**
+   * RTF: fix block layout for guard clauses. javac places the if-body code first
+   * (fall-through from condition) and the else-body after. When Vineflower puts
+   * the main code as the if-body and a short return/throw as the else-body,
+   * the compiled layout has the short block at the end - but the original had it
+   * inline (before main code).
+   *
+   * Fix: for if-else where the else-body is a short terminating block (return/throw)
+   * and the if-body is longer, swap them so javac places the short block first.
+   */
+  private static void fixGuardClauseLayout(Statement stat) {
+    for (Statement child : new ArrayList<>(stat.getStats())) {
+      fixGuardClauseLayout(child);
+    }
+
+    if (!(stat instanceof IfStatement)) return;
+    IfStatement ifStat = (IfStatement) stat;
+    if (ifStat.iftype != IfStatement.IFTYPE_IFELSE) return;
+
+    Statement ifBody = ifStat.getIfstat();
+    Statement elseBody = ifStat.getElsestat();
+    if (ifBody == null || elseBody == null) return;
+
+    // Only swap when the else-body is a short terminating block
+    // and the if-body is significantly longer
+    int ifSize = estimateInsnCount(ifBody);
+    int elseSize = estimateInsnCount(elseBody);
+
+    if (elseSize > 0 && elseSize <= 6 && ifSize > elseSize * 2 && isTerminating(elseBody)) {
+      // Swap: move the short return to if-body, main code to else-body
+      ifStat.setIfstat(elseBody);
+      ifStat.setElsestat(ifBody);
+
+      StatEdge tmpEdge = ifStat.getIfEdge();
+      ifStat.setIfEdge(ifStat.getElseEdge());
+      ifStat.setElseEdge(tmpEdge);
+
+      // Negate condition
+      IfExprent headExpr = ifStat.getHeadexprent();
+      Exprent negated = new FunctionExprent(
+        FunctionExprent.FunctionType.BOOL_NOT, headExpr.getCondition(), null);
+      Exprent simplified = SecondaryFunctionsHelper.propagateBoolNot(negated);
+      headExpr.setCondition(simplified != null ? simplified : negated);
+    }
+  }
+
+  /** Estimate the bytecode instruction count of a statement (rough). */
+  private static int estimateInsnCount(Statement stat) {
+    int count = 0;
+    if (stat.getExprents() != null) {
+      count = stat.getExprents().size(); // rough: 1 exprent ≈ 1-3 insns
+    }
+    for (Statement child : stat.getStats()) {
+      count += estimateInsnCount(child);
+    }
+    return count;
+  }
+
+  /** Check if a statement always terminates (return or throw on all paths). */
+  private static boolean isTerminating(Statement stat) {
+    if (stat.getExprents() != null && !stat.getExprents().isEmpty()) {
+      Exprent last = stat.getExprents().get(stat.getExprents().size() - 1);
+      return last instanceof ExitExprent;
+    }
+    // Sequence: last child must terminate
+    if (stat.type == Statement.StatementType.SEQUENCE) {
+      List<Statement> stats = stat.getStats();
+      return !stats.isEmpty() && isTerminating(stats.get(stats.size() - 1));
+    }
+    // If-else: both branches must terminate
+    if (stat.type == Statement.StatementType.IF) {
+      IfStatement ifStat = (IfStatement) stat;
+      if (ifStat.iftype == IfStatement.IFTYPE_IFELSE
+          && ifStat.getIfstat() != null && ifStat.getElsestat() != null) {
+        return isTerminating(ifStat.getIfstat()) && isTerminating(ifStat.getElsestat());
+      }
+    }
+    return false;
   }
 
   /**
