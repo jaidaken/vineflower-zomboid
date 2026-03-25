@@ -75,23 +75,29 @@ public class StructContext {
       return null;
     }
 
-    final StructClass ret = this.classes.computeIfAbsent(name, key -> {
-      // load class from a context unit
-      final ContextUnit unitForClass = this.unitsByClassName.get(key);
+    // Avoid computeIfAbsent — it deadlocks when the loading function
+    // recursively calls getClass for a dependency that hashes to the
+    // same ConcurrentHashMap bucket (JDK-8062841).
+    StructClass ret = this.classes.get(name);
+    if (ret == null) {
+      final ContextUnit unitForClass = this.unitsByClassName.get(name);
       if (unitForClass != null) {
-        final StructClass clazz = tryLoadClass(unitForClass, key);
-        if (clazz != null) {
-          return clazz;
+        ret = tryLoadClass(unitForClass, name);
+      }
+      if (ret == null) {
+        for (final ContextUnit unit : this.lazyUnits) {
+          ret = tryLoadClass(unit, name);
+          if (ret != null) {
+            break;
+          }
         }
       }
-      for (final ContextUnit unit : this.lazyUnits) {
-        final StructClass clazz = tryLoadClass(unit, key);
-        if (clazz != null) {
-          return clazz;
-        }
+      if (ret == null) {
+        ret = getSentinel();
       }
-      return getSentinel();
-    });
+      this.classes.putIfAbsent(name, ret);
+      ret = this.classes.get(name);
+    }
     if (ret == getSentinel()) {
       return null;
     } else {
