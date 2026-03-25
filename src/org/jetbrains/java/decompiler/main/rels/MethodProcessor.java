@@ -28,6 +28,7 @@ import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
 import org.jetbrains.java.decompiler.util.DotExporter;
+import org.jetbrains.java.decompiler.util.StartEndPair;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -672,6 +673,9 @@ public class MethodProcessor implements Runnable {
 
     // Only swap when the else-body is a short terminating block
     // and the if-body is significantly longer.
+    // Broader heuristics (both-terminate + size comparison) regress because
+    // the original compiler's branch direction doesn't correlate with size.
+    // A proper fix requires tracking the original branch direction per IfStatement.
     int ifSize = estimateInsnCount(ifBody);
     int elseSize = estimateInsnCount(elseBody);
 
