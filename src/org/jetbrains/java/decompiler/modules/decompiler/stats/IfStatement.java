@@ -47,6 +47,11 @@ public class IfStatement extends Statement {
   // to swap if/else bodies back to the correct parity.
   private boolean rtfConditionFlipped = false;
 
+  // RTF: tracks whether the current if-body corresponds to the original
+  // bytecode fall-through path. At construction, ifstat = jump target (false).
+  // Toggled on every body swap so the layout pass can match javac's block order.
+  private boolean rtfIfBodyIsFallThrough = false;
+
   private final List<Exprent> headexprent = new ArrayList<>(1); // contains IfExprent
 
   // *****************************************************************************
@@ -88,8 +93,9 @@ public class IfStatement extends Statement {
         }
         break;
       case 2:
-        elsestat = lstHeadSuccs.get(0).getDestination();
-        ifstat = lstHeadSuccs.get(1).getDestination();
+        elsestat = lstHeadSuccs.get(0).getDestination();  // fall-through
+        ifstat = lstHeadSuccs.get(1).getDestination();    // jump target
+        rtfIfBodyIsFallThrough = false;  // ifstat is the jump target
 
         List<StatEdge> lstSucc = ifstat.getSuccessorEdges(StatEdge.TYPE_REGULAR);
         List<StatEdge> lstSucc1 = elsestat.getSuccessorEdges(StatEdge.TYPE_REGULAR);
@@ -111,8 +117,9 @@ public class IfStatement extends Statement {
 
         if (ifstat == post) {
           if (elsestat != post) {
-            ifstat = elsestat;
+            ifstat = elsestat;  // ifstat is now the fall-through path
             negated = true;
+            rtfIfBodyIsFallThrough = true;
           }
           else {
             ifstat = null;
@@ -349,6 +356,7 @@ public class IfStatement extends Statement {
     is.iftype = this.iftype;
     is.negated = this.negated;
     is.rtfConditionFlipped = this.rtfConditionFlipped;
+    is.rtfIfBodyIsFallThrough = this.rtfIfBodyIsFallThrough;
 
     return is;
   }
@@ -447,6 +455,14 @@ public class IfStatement extends Statement {
 
   public void toggleRtfConditionFlipped() {
     this.rtfConditionFlipped = !this.rtfConditionFlipped;
+  }
+
+  public boolean isRtfIfBodyIsFallThrough() {
+    return rtfIfBodyIsFallThrough;
+  }
+
+  public void toggleRtfIfBodyIsFallThrough() {
+    this.rtfIfBodyIsFallThrough = !this.rtfIfBodyIsFallThrough;
   }
 
   @Override
@@ -563,6 +579,7 @@ public class IfStatement extends Statement {
     this.iftype = IfStatement.IFTYPE_IF;
     this.setIfstat(this.getElsestat());
     this.setElsestat(null);
+    this.rtfIfBodyIsFallThrough = !this.rtfIfBodyIsFallThrough; // bodies swapped
 
     // remove the if head -> ifStat edge
     this.getFirst().removeSuccessor(this.getIfEdge());

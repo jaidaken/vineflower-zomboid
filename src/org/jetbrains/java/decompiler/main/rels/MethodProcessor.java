@@ -626,6 +626,7 @@ public class MethodProcessor implements Runnable {
         // Swap bodies
         ifStat.setIfstat(elseBody);
         ifStat.setElsestat(ifBody);
+        ifStat.toggleRtfIfBodyIsFallThrough(); // bodies swapped
 
         // Swap edges
         StatEdge tmpEdge = ifStat.getIfEdge();
@@ -640,10 +641,6 @@ public class MethodProcessor implements Runnable {
         headExpr.setCondition(simplified != null ? simplified : negated);
       }
     }
-    // IFTYPE_IF: condition changes (even simple inversions like NE->EQ) change the
-    // compiled branch opcode, causing more methods to diverge than it fixes.
-    // This category requires a fundamentally different approach - fixing at the
-    // CFG/block ordering level rather than the expression level.
 
     ifStat.setRtfConditionFlipped(false);
   }
@@ -671,15 +668,17 @@ public class MethodProcessor implements Runnable {
     Statement elseBody = ifStat.getElsestat();
     if (ifBody == null || elseBody == null) return;
 
-    // Only swap when the else-body is a short terminating block
-    // and the if-body is significantly longer.
-    // Broader heuristics (both-terminate + size comparison) regress because
-    // the original compiler's branch direction doesn't correlate with size.
-    // A proper fix requires tracking the original branch direction per IfStatement.
-    int ifSize = estimateInsnCount(ifBody);
-    int elseSize = estimateInsnCount(elseBody);
+    // javac places the if-body as fall-through (first in bytecode) and the
+    // else-body after. To match the original layout, the if-body should
+    // contain code from the LOWER bytecode offset (the original fall-through).
+    // Compare the start offsets of the if-body and else-body to determine
+    // which was the original fall-through.
+    StartEndPair ifRange = ifBody.getStartEndRange();
+    StartEndPair elseRange = elseBody.getStartEndRange();
 
-    if (elseSize > 0 && elseSize <= 6 && ifSize > elseSize * 2 && isTerminating(elseBody)) {
+    // If the else-body starts at a lower offset than the if-body,
+    // the else was the original fall-through and should be the if-body.
+    if (elseRange.start >= 0 && ifRange.start >= 0 && elseRange.start < ifRange.start) {
       swapIfElseBranches(ifStat);
     }
   }
@@ -690,6 +689,7 @@ public class MethodProcessor implements Runnable {
 
     ifStat.setIfstat(elseBody);
     ifStat.setElsestat(ifBody);
+    ifStat.toggleRtfIfBodyIsFallThrough(); // bodies swapped
 
     StatEdge tmpEdge = ifStat.getIfEdge();
     ifStat.setIfEdge(ifStat.getElseEdge());
@@ -792,6 +792,7 @@ public class MethodProcessor implements Runnable {
     // Swap bodies
     ifStat.setIfstat(elseBody);
     ifStat.setElsestat(ifBody);
+    ifStat.toggleRtfIfBodyIsFallThrough(); // bodies swapped
 
     // Swap edges
     StatEdge tmpEdge = ifStat.getIfEdge();

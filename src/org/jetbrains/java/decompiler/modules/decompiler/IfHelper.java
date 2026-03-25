@@ -379,6 +379,7 @@ public final class IfHelper {
           firstif.getFirst().addSuccessor(newifedge);
           firstif.setIfEdge(newifedge);
           firstif.setIfstat(second);
+          firstif.toggleRtfIfBodyIsFallThrough(); // body semantics changed
 
           firstif.getStats().addWithKey(second, second.id);
           second.setParent(firstif);
@@ -746,6 +747,7 @@ public final class IfHelper {
 
   private static void swapBranches(IfStatement ifstat, boolean noifstat, SequenceStatement parent) {
     ValidationHelper.validateTrue(ifstat.iftype == IfStatement.IFTYPE_IF, "This method is meant for swapping the branches of non if-else IfStatements");
+    ifstat.toggleRtfIfBodyIsFallThrough(); // body semantics changed
     // build and cut the new else statement
     List<Statement> lst = new ArrayList<>();
     for (int i = parent.getStats().size() - 1; i >= 0; i--) {

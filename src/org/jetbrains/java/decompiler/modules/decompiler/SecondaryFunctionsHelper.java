@@ -65,6 +65,7 @@ public final class SecondaryFunctionsHelper {
           ifelsestat.iftype = IfStatement.IFTYPE_IF;
           ifelsestat.setIfstat(ifelsestat.getElsestat());
           ifelsestat.setElsestat(null);
+          ifelsestat.toggleRtfIfBodyIsFallThrough(); // bodies swapped
 
           if (ifelsestat.getAllSuccessorEdges().isEmpty() && !ifstat.getAllSuccessorEdges().isEmpty()) {
             StatEdge endedge = ifstat.getFirstSuccessor();
