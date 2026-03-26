@@ -1282,7 +1282,7 @@ public class SimplifyExprentsHelper {
               VarExprent ifVar = (VarExprent) ifAssign.getLeft();
               VarExprent elseVar = (VarExprent) elseAssign.getLeft();
 
-              if (ifVar.getIndex() == elseVar.getIndex() && ifVar.isStack()) { // ifVar.getIndex() >= VarExprent.STACK_BASE) {
+              if (ifVar.getIndex() == elseVar.getIndex() && ifVar.isStack()) {
                 boolean found = false;
 
                 // Can happen in EliminateLoopsHelper
