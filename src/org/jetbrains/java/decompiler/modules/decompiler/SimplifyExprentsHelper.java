@@ -825,14 +825,30 @@ public class SimplifyExprentsHelper {
           && ve.getVersion() == copyVar.getVersion()) {
         return true;
       }
-      // Through a cast: return (float)copy
+      // Through a cast: return (float)copy, return (short)copy, etc.
+      // Handles CAST, I2F, I2D, I2L, I2B, I2S, I2C and other single-operand cast-like functions
       if (retVal instanceof FunctionExprent fn
-          && fn.getFuncType() == FunctionType.CAST
+          && fn.getFuncType().castType != null
+          && fn.getLstOperands().size() == 1
           && fn.getLstOperands().get(0) instanceof VarExprent ve
           && ve.getIndex() == copyVar.getIndex()
           && ve.getVersion() == copyVar.getVersion()) {
         return true;
       }
+    }
+    return false;
+  }
+
+  /**
+   * Checks if two expressions refer to the same field, comparing by name and classname
+   * rather than using FieldExprent.equals() which can fail when the 'this' instance
+   * VarExprents have different inferred types.
+   */
+  private static boolean sameField(Exprent a, Exprent b) {
+    if (a instanceof FieldExprent fa && b instanceof FieldExprent fb) {
+      return fa.getName().equals(fb.getName())
+          && fa.getClassname().equals(fb.getClassname())
+          && fa.isStatic() == fb.isStatic();
     }
     return false;
   }
@@ -857,20 +873,32 @@ public class SimplifyExprentsHelper {
     if (!(first instanceof AssignmentExprent af) || !(af.getLeft() instanceof VarExprent copyVar)) return false;
     if (!(af.getRight() instanceof FieldExprent field)) return false;
 
-    // Second: field = field + 1 (self-increment)
-    if (!(second instanceof AssignmentExprent as)) return false;
-    if (!field.equals(as.getLeft())) return false;
-    if (!(as.getRight() instanceof FunctionExprent func)) return false;
-    if (func.getFuncType() != FunctionType.ADD && func.getFuncType() != FunctionType.SUB) return false;
-
-    Exprent addend = func.getLstOperands().get(0);
-    Exprent constVal = func.getLstOperands().get(1);
-    if (!(constVal instanceof ConstExprent) && addend instanceof ConstExprent && func.getFuncType() == FunctionType.ADD) {
-      addend = constVal;
-      constVal = func.getLstOperands().get(0);
+    // Second: field = field + 1 (assignment form) or field++ (PPI form)
+    // Use name-based field comparison because FieldExprent.equals() can fail when
+    // the 'this' instance VarExprents have different inferred types across occurrences.
+    FunctionType incType;
+    BitSet incBytecode;
+    if (second instanceof AssignmentExprent as && sameField(field, as.getLeft())
+        && as.getRight() instanceof FunctionExprent func
+        && (func.getFuncType() == FunctionType.ADD || func.getFuncType() == FunctionType.SUB)) {
+      Exprent addend = func.getLstOperands().get(0);
+      Exprent constVal = func.getLstOperands().get(1);
+      if (!(constVal instanceof ConstExprent) && addend instanceof ConstExprent && func.getFuncType() == FunctionType.ADD) {
+        addend = constVal;
+        constVal = func.getLstOperands().get(0);
+      }
+      if (!(constVal instanceof ConstExprent) || !((ConstExprent) constVal).hasValueOne()) return false;
+      if (!sameField(field, addend)) return false;
+      incType = func.getFuncType() == FunctionType.ADD ? FunctionType.IPP : FunctionType.IMM;
+      incBytecode = func.bytecode;
+    } else if (second instanceof FunctionExprent ppi
+        && (ppi.getFuncType() == FunctionType.PPI || ppi.getFuncType() == FunctionType.MMI)
+        && sameField(field, ppi.getLstOperands().get(0))) {
+      incType = ppi.getFuncType() == FunctionType.PPI ? FunctionType.IPP : FunctionType.IMM;
+      incBytecode = ppi.bytecode;
+    } else {
+      return false;
     }
-    if (!(constVal instanceof ConstExprent) || !((ConstExprent) constVal).hasValueOne()) return false;
-    if (!field.equals(addend)) return false; // must be field = field + 1, not field = other + 1
 
     // Third: return (cast)copy or return copy
     if (!(third instanceof ExitExprent exit) || exit.getExitType() != ExitExprent.Type.RETURN || exit.getValue() == null) return false;
@@ -879,15 +907,15 @@ public class SimplifyExprentsHelper {
     Exprent retVal = exit.getValue();
     if (retVal instanceof VarExprent ve) {
       retVar = ve;
-    } else if (retVal instanceof FunctionExprent fn && fn.getFuncType() == FunctionType.CAST
-        && fn.getLstOperands().get(0) instanceof VarExprent ve) {
+    } else if (retVal instanceof FunctionExprent fn && fn.getFuncType().castType != null
+        && fn.getLstOperands().size() == 1 && fn.getLstOperands().get(0) instanceof VarExprent ve) {
       retVar = ve;
     }
     if (retVar == null || retVar.getIndex() != copyVar.getIndex() || retVar.getVersion() != copyVar.getVersion()) return false;
 
     // All checks pass. Fold: create field++ and replace copy in return.
-    FunctionType type = func.getFuncType() == FunctionType.ADD ? FunctionType.IPP : FunctionType.IMM;
-    FunctionExprent postInc = new FunctionExprent(type, field, func.bytecode);
+    FunctionType type = incType;
+    FunctionExprent postInc = new FunctionExprent(type, field, incBytecode);
     postInc.setImplicitType(VarType.VARTYPE_INT);
 
     // Replace the copy var in the return with the post-increment expression
