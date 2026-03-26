@@ -586,13 +586,13 @@ public class VarDefinitionHelper {
     // For basic blocks: check exprents linearly
     if (stat.getExprents() != null) {
       for (Exprent expr : stat.getExprents()) {
-        if (exprAssignsVar(expr, varIndex)) {
-          debugLog(indent + "ASSIGNED in basic block");
-          return true;
-        }
         if (exprReadsVar(expr, varIndex)) {
           debugLog(indent + "READ before assign in basic block");
           return false;
+        }
+        if (exprAssignsVarDeep(expr, varIndex)) {
+          debugLog(indent + "ASSIGNED in basic block");
+          return true;
         }
       }
       debugLog(indent + "not found in basic block (" + stat.getExprents().size() + " exprents)");
@@ -691,15 +691,17 @@ public class VarDefinitionHelper {
     if (stat.type == Statement.StatementType.TRY_CATCH || stat.type == Statement.StatementType.CATCH_ALL) {
       if (stat.getFirst() != null) {
         Statement tryBody = stat.getFirst();
-        // Case 1: first exprent assigns the variable
+        // Case 1: first exprent assigns the variable (including nested assignments)
         if (tryBody.getExprents() != null && !tryBody.getExprents().isEmpty()) {
-          if (exprAssignsVar(tryBody.getExprents().get(0), varIndex)) {
+          Exprent firstExpr = tryBody.getExprents().get(0);
+          if (!exprReadsVar(firstExpr, varIndex) && exprAssignsVarDeep(firstExpr, varIndex)) {
             return true;
           }
         } else if (tryBody.type == Statement.StatementType.SEQUENCE && !tryBody.getStats().isEmpty()) {
           Statement firstChild = tryBody.getStats().get(0);
           if (firstChild.getExprents() != null && !firstChild.getExprents().isEmpty()) {
-            if (exprAssignsVar(firstChild.getExprents().get(0), varIndex)) {
+            Exprent firstExpr = firstChild.getExprents().get(0);
+            if (!exprReadsVar(firstExpr, varIndex) && exprAssignsVarDeep(firstExpr, varIndex)) {
               return true;
             }
           }
@@ -737,11 +739,11 @@ public class VarDefinitionHelper {
   private static Boolean checkStatementForVarImpl(Statement stat, int varIndex, int depth) {
     if (stat.getExprents() != null) {
       for (Exprent expr : stat.getExprents()) {
-        if (exprAssignsVar(expr, varIndex)) {
-          return true;
-        }
         if (exprReadsVar(expr, varIndex)) {
           return false;
+        }
+        if (exprAssignsVarDeep(expr, varIndex)) {
+          return true;
         }
       }
       return null;
@@ -765,14 +767,11 @@ public class VarDefinitionHelper {
   private static Boolean checkStatementForVar(Statement stat, int varIndex) {
     if (stat.getExprents() != null) {
       for (Exprent expr : stat.getExprents()) {
-        if (expr instanceof AssignmentExprent) {
-          Exprent left = ((AssignmentExprent) expr).getLeft();
-          if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) {
-            return true;
-          }
-        }
         if (exprReadsVar(expr, varIndex)) {
           return false;
+        }
+        if (exprAssignsVarDeep(expr, varIndex)) {
+          return true;
         }
       }
       return null; // not referenced in this block
@@ -790,8 +789,8 @@ public class VarDefinitionHelper {
     if (stat.getExprents() != null) {
       for (Exprent expr : stat.getExprents()) {
         if (exprReadsVar(expr, varIndex)) return true;
-        // Check assignments including chained ones (a = b = value)
-        if (exprAssignsVar(expr, varIndex)) return true;
+        // Check assignments including nested ones (e.g. foo(x, var = expr))
+        if (exprAssignsVarDeep(expr, varIndex)) return true;
       }
     }
     for (Statement child : stat.getStats()) {
@@ -869,10 +868,11 @@ public class VarDefinitionHelper {
     if (expr instanceof AssignmentExprent) {
       AssignmentExprent assign = (AssignmentExprent) expr;
       Exprent left = assign.getLeft();
-      // If this assignment writes to our variable, the right side determines
-      // whether it's a pure write or involves a read
+      // If this assignment writes to our variable, check the right side for reads.
+      // Pure assignment (var = expr without var in expr) is not a read,
+      // but compound patterns (var = var + 1) read the var before writing.
       if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) {
-        return false; // assignment to var is not a read
+        return exprReadsVar(assign.getRight(), varIndex);
       }
       // For non-var left sides (field access, array index), check left's sub-expressions
       for (Exprent sub : left.getAllExprents(true)) {
@@ -889,10 +889,12 @@ public class VarDefinitionHelper {
       }
       return false;
     }
-    // For all other expressions, check all sub-expressions
-    for (Exprent sub : expr.getAllExprents(true)) {
-      if (sub instanceof VarExprent && ((VarExprent) sub).getIndex() == varIndex
-          && !((VarExprent) sub).isDefinition()) {
+    // For all other expressions, recurse into direct children.
+    // This correctly handles nested assignments (e.g. foo(x, var = expr))
+    // because AssignmentExprent children are processed by the branch above,
+    // which recognizes the left side as a write rather than a read.
+    for (Exprent sub : expr.getAllExprents()) {
+      if (exprReadsVar(sub, varIndex)) {
         return true;
       }
     }
