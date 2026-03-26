@@ -1150,8 +1150,10 @@ public class VarDefinitionHelper {
     Map<VarVersionPair, VarVersionPair> denylist = new HashMap<>();
     VPPEntry remap = mergeVars(stat, parent, new HashMap<>(), denylist);
     while (remap != null) {
-      //System.out.println("Remapping: " + remap.getKey() + " -> " + remap.getValue());
-      if (!remapVar(stat, remap.getKey(), remap.getValue())) {
+      if (remapVar(stat, remap.getKey(), remap.getValue())) {
+        // Remap succeeded - clean up the from definition from varDefinitions
+        removeFromVarDefinitions(stat, remap.getKey());
+      } else {
         denylist.put(remap.getKey(), remap.getValue());
       }
 
@@ -1174,8 +1176,16 @@ public class VarDefinitionHelper {
           Integer index = varproc.getVarOriginalIndex(var.getIndex());
           if (index != null) {
             if (this_vars.containsKey(index)) {
-              stat.getVarDefinitions().remove(x);
-              return new VPPEntry(var, this_vars.get(index));
+              VarVersionPair from = new VarVersionPair(var);
+              VarVersionPair to = this_vars.get(index);
+              // Check denylist to avoid re-proposing a failed merge
+              VarVersionPair denied = denylist.get(from);
+              if (denied != null && denied.equals(to)) {
+                continue; // skip - this merge was already tried and failed
+              }
+              // Don't eagerly remove from varDefinitions - let the merge loop
+              // handle cleanup after confirming the remap succeeds.
+              return new VPPEntry(var, to);
             }
             this_vars.put(index, new VarVersionPair(var));
             leaked.put(index, new VarVersionPair(var));
@@ -1422,6 +1432,18 @@ public class VarDefinitionHelper {
     }
 
     return null;
+  }
+
+  /**
+   * Remove a variable's definition from all varDefinitions lists in the statement tree.
+   * Called after a successful remap to clean up the 'from' variable's declaration.
+   */
+  private static void removeFromVarDefinitions(Statement stat, VarVersionPair from) {
+    stat.getVarDefinitions().removeIf(exp ->
+        exp instanceof VarExprent ve && from.equals(new VarVersionPair(ve)));
+    for (Statement child : stat.getStats()) {
+      removeFromVarDefinitions(child, from);
+    }
   }
 
   private boolean remapVar(Statement stat, VarVersionPair from, VarVersionPair to) {
