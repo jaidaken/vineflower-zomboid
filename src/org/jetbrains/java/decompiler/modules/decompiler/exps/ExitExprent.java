@@ -12,7 +12,11 @@ import org.jetbrains.java.decompiler.struct.attr.StructExceptionsAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
+
+import java.util.Arrays;
+import java.util.List;
 import org.jetbrains.java.decompiler.struct.match.MatchEngine;
 import org.jetbrains.java.decompiler.struct.match.MatchNode;
 import org.jetbrains.java.decompiler.util.InterpreterUtil;
@@ -96,11 +100,39 @@ public class ExitExprent extends Exprent {
         }
         buf.append(' ');
 
+        // RTF: when returning a ternary from a narrowing method (byte/short/char),
+        // cast each operand instead of the whole ternary. This produces
+        // "cond ? (byte)0 : (byte)1" which javac compiles without i2b,
+        // instead of "(byte)(cond ? 0 : 1)" which adds i2b.
+        boolean rtfNarrowTernary = false;
+        if (DecompilerContext.isRoundtripFidelity()
+            && value instanceof FunctionExprent ternary
+            && ternary.getFuncType() == FunctionExprent.FunctionType.TERNARY
+            && ret.typeFamily == TypeFamily.INTEGER
+            && (ret.type == CodeType.BYTE || ret.type == CodeType.SHORT || ret.type == CodeType.CHAR)) {
+          List<Exprent> ops = ternary.getLstOperands();
+          if (ops.size() == 3) {
+            // Wrap each operand in a cast to the return type
+            for (int oi = 1; oi <= 2; oi++) {
+              Exprent op = ops.get(oi);
+              if (op instanceof ConstExprent) {
+                FunctionExprent cast = new FunctionExprent(FunctionExprent.FunctionType.CAST,
+                    Arrays.asList(op, new ConstExprent(ret, null, null)), null);
+                ops.set(oi, cast);
+              }
+            }
+            rtfNarrowTernary = true;
+          }
+        }
+
         // RTF: when returning from a GENVAR method (e.g., <E> E foo()), force the cast
         // so that Object-typed variables get cast to E. Without castAlways, the cast is
         // suppressed because the erased types (both Object) match.
         if (DecompilerContext.isRoundtripFidelity() && ret.type == CodeType.GENVAR) {
           ExprProcessor.getCastedExprent(value, ret, buf, indent, ExprProcessor.NullCastType.DONT_CAST, true, false, false);
+        } else if (rtfNarrowTernary) {
+          // Operands already cast - render without outer cast
+          buf.append(value.toJava(indent));
         } else {
           ExprProcessor.getCastedExprent(value, ret, buf, indent, ExprProcessor.NullCastType.DONT_CAST_AT_ALL, false, false, false);
         }
