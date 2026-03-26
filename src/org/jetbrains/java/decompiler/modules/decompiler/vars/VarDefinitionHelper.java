@@ -491,6 +491,32 @@ public class VarDefinitionHelper {
       return false;
     }
 
+    // For switch: variable must be assigned in ALL case branches
+    if (stat.type == Statement.StatementType.SWITCH) {
+      SwitchStatement switchStat = (SwitchStatement) stat;
+
+      // Check the head (switch expression) for reads/assignments
+      if (switchStat.getFirst() != null) {
+        Boolean result = checkStatementForVarImpl(switchStat.getFirst(), varIndex, depth + 1);
+        if (result != null) return result;
+      }
+
+      // Must have a default case for complete coverage
+      boolean hasDefault = switchStat.getDefaultEdge() != null;
+      if (!hasDefault) return false;
+
+      // All case bodies must assign the variable
+      List<Statement> caseStatements = switchStat.getCaseStatements();
+      if (caseStatements.isEmpty()) return false;
+
+      for (Statement caseStat : caseStatements) {
+        if (!isDefinitelyAssignedImpl(caseStat, varIndex, depth + 1)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     if (stat.type == Statement.StatementType.ROOT && stat.getFirst() != null) {
       return isDefinitelyAssignedImpl(stat.getFirst(), varIndex, depth);
     }

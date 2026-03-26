@@ -857,6 +857,56 @@ public class ExprProcessor implements CodeConstants {
     return prlst;
   }
 
+  /**
+   * RTF: chain consecutive assignments with the same simple RHS into a = b = value.
+   * Only chains when both LHS are VarExprents and RHS is a simple load (variable,
+   * field, or constant). Returns a new list with chained pairs merged.
+   */
+  private static List<? extends Exprent> chainDupAssignments(List<? extends Exprent> lst) {
+    List<Exprent> result = new ArrayList<>(lst);
+    for (int i = result.size() - 2; i >= 0; i--) {
+      Exprent first = result.get(i);
+      Exprent second = result.get(i + 1);
+
+      if (!(first instanceof AssignmentExprent asf) || !(second instanceof AssignmentExprent ass)) continue;
+      if (!(asf.getLeft() instanceof VarExprent varA) || !(ass.getLeft() instanceof VarExprent varB)) continue;
+
+      // Skip if either is a variable definition (would produce "Type a = Type b = value")
+      if (varA.isDefinition() || varB.isDefinition()) continue;
+
+      // Same RHS
+      if (!asf.getRight().equals(ass.getRight())) continue;
+
+      // RHS must not be an assignment (no cascading)
+      if (asf.getRight() instanceof AssignmentExprent) continue;
+
+      // RHS must be simple
+      Exprent rhs = asf.getRight();
+      if (!(rhs instanceof VarExprent) && !(rhs instanceof FieldExprent) && !(rhs instanceof ConstExprent)) continue;
+
+      // Different LHS variables with the same type
+      if (varA.getIndex() == varB.getIndex()) continue;
+      if (!varA.getVarType().equals(varB.getVarType())) continue;
+
+      // RHS var must not be either LHS
+      if (rhs instanceof VarExprent rhsVar) {
+        if (rhsVar.getIndex() == varA.getIndex() || rhsVar.getIndex() == varB.getIndex()) continue;
+      }
+
+      // Neither LHS appears in the other's subtree
+      boolean crossRef = false;
+      for (Exprent sub : ass.getRight().getAllExprents(true)) {
+        if (sub instanceof VarExprent ve && ve.getIndex() == varA.getIndex()) { crossRef = true; break; }
+      }
+      if (crossRef) continue;
+
+      // Chain: first becomes a = (b = value), remove second
+      asf.setRight(ass);
+      result.remove(i + 1);
+    }
+    return result;
+  }
+
   public static boolean endsWithSemicolon(Exprent expr) {
     return !(expr instanceof SwitchHeadExprent ||
              expr instanceof MonitorExprent ||
