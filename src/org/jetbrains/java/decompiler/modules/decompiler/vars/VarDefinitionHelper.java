@@ -290,8 +290,21 @@ public class VarDefinitionHelper {
                 }
               }
               if (!placed) {
-                lst = parent.getVarDefinitions();
-                placed = true;
+                if (CodeConstants.INIT_NAME.equals(mt.getName())) {
+                  // In constructors, parent.getVarDefinitions() would place the
+                  // declaration before super()/this(), which is illegal in Java.
+                  // Find the basic block containing the super()/this() call and
+                  // place the declaration there (addindex will skip past it).
+                  Statement superBlock = findSuperCallBlock(root);
+                  if (superBlock != null && superBlock.getExprents() != null) {
+                    lst = superBlock.getExprents();
+                    placed = true;
+                  }
+                }
+                if (!placed) {
+                  lst = parent.getVarDefinitions();
+                  placed = true;
+                }
               }
               break;
             }
@@ -884,6 +897,29 @@ public class VarDefinitionHelper {
       }
     }
     return false;
+  }
+
+  /**
+   * Find the basic block containing the super()/this() call in a constructor.
+   * Returns the Statement whose exprents list contains the InvocationExprent
+   * with functype INIT, or null if not found.
+   */
+  private static Statement findSuperCallBlock(Statement stat) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (expr instanceof InvocationExprent inv
+            && inv.getFunctype() == InvocationExprent.Type.INIT) {
+          return stat;
+        }
+      }
+    }
+    for (Statement child : stat.getStats()) {
+      Statement result = findSuperCallBlock(child);
+      if (result != null) {
+        return result;
+      }
+    }
+    return null;
   }
 
   private Statement findFirstBlock(Statement stat, int varindex) {
