@@ -1323,9 +1323,17 @@ public class SimplifyExprentsHelper {
               }
             }
           } else if (ifExpr instanceof ExitExprent && elseExpr instanceof ExitExprent) {
-            // RTF: skip return ternary collapse — two returns become one, changing bytecode
+            // RTF: skip return ternary collapse when the original had separate returns
+            // (two ireturn instructions). Allow when the original had a shared return
+            // (one ireturn fed by both paths) because NOT collapsing creates a temp
+            // variable that adds narrowing casts (i2b/i2s) for byte/short methods.
             if (DecompilerContext.isRoundtripFidelity()) {
-              return false;
+              // Shared return = both ExitExprents have overlapping bytecode offsets
+              boolean sharedReturn = ifExpr.bytecode != null && elseExpr.bytecode != null
+                  && ifExpr.bytecode.intersects(elseExpr.bytecode);
+              if (!sharedReturn) {
+                return false;
+              }
             }
             ExitExprent ifExit = (ExitExprent) ifExpr;
             ExitExprent elseExit = (ExitExprent) elseExpr;
