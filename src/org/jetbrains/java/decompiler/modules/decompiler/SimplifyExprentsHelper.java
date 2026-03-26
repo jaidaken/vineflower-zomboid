@@ -224,6 +224,14 @@ public class SimplifyExprentsHelper {
             continue;
           }
         }
+        // RTF: fold 3-statement pattern: copy = field; field = field + 1; return (cast)copy
+        // into: return (cast)(field++)
+        // Handles the self-increment case where isIPPorIMM2 doesn't match because
+        // the increment uses the field directly (field = field + 1) not the copy (field = copy + 1).
+        if (index + 2 < list.size() && foldFieldPostIncrementReturn(list, index)) {
+          res = true;
+          continue;
+        }
       }
 
       // assignment on stack
@@ -804,7 +812,95 @@ public class SimplifyExprentsHelper {
     if (isVarUsedOnlyAsMethodArg(copyVar, following)) {
       return true;
     }
+    // Also safe if the copy var is used in a return statement.
+    // Pattern: copy = this.field; this.field++; return (cast)copy;
+    // This reconstructs to: return (cast)(this.field++);
+    if (following instanceof ExitExprent exit
+        && exit.getExitType() == ExitExprent.Type.RETURN
+        && exit.getValue() != null) {
+      Exprent retVal = exit.getValue();
+      // Direct use: return copy
+      if (retVal instanceof VarExprent ve
+          && ve.getIndex() == copyVar.getIndex()
+          && ve.getVersion() == copyVar.getVersion()) {
+        return true;
+      }
+      // Through a cast: return (float)copy
+      if (retVal instanceof FunctionExprent fn
+          && fn.getFuncType() == FunctionType.CAST
+          && fn.getLstOperands().get(0) instanceof VarExprent ve
+          && ve.getIndex() == copyVar.getIndex()
+          && ve.getVersion() == copyVar.getVersion()) {
+        return true;
+      }
+    }
     return false;
+  }
+
+  /**
+   * RTF: folds 3-statement pattern into a single return:
+   *   copy = field; field = field + 1; return (cast)copy
+   * becomes:
+   *   return (cast)(field++)
+   *
+   * This handles the self-increment case (field = field + 1) that isIPPorIMM2 misses
+   * because it expects (field = copy + 1).
+   */
+  private static boolean foldFieldPostIncrementReturn(List<Exprent> list, int index) {
+    if (!DecompilerContext.isRoundtripFidelity()) return false;
+
+    Exprent first = list.get(index);
+    Exprent second = list.get(index + 1);
+    Exprent third = list.get(index + 2);
+
+    // First: copy = field
+    if (!(first instanceof AssignmentExprent af) || !(af.getLeft() instanceof VarExprent copyVar)) return false;
+    if (!(af.getRight() instanceof FieldExprent field)) return false;
+
+    // Second: field = field + 1 (self-increment)
+    if (!(second instanceof AssignmentExprent as)) return false;
+    if (!field.equals(as.getLeft())) return false;
+    if (!(as.getRight() instanceof FunctionExprent func)) return false;
+    if (func.getFuncType() != FunctionType.ADD && func.getFuncType() != FunctionType.SUB) return false;
+
+    Exprent addend = func.getLstOperands().get(0);
+    Exprent constVal = func.getLstOperands().get(1);
+    if (!(constVal instanceof ConstExprent) && addend instanceof ConstExprent && func.getFuncType() == FunctionType.ADD) {
+      addend = constVal;
+      constVal = func.getLstOperands().get(0);
+    }
+    if (!(constVal instanceof ConstExprent) || !((ConstExprent) constVal).hasValueOne()) return false;
+    if (!field.equals(addend)) return false; // must be field = field + 1, not field = other + 1
+
+    // Third: return (cast)copy or return copy
+    if (!(third instanceof ExitExprent exit) || exit.getExitType() != ExitExprent.Type.RETURN || exit.getValue() == null) return false;
+
+    VarExprent retVar = null;
+    Exprent retVal = exit.getValue();
+    if (retVal instanceof VarExprent ve) {
+      retVar = ve;
+    } else if (retVal instanceof FunctionExprent fn && fn.getFuncType() == FunctionType.CAST
+        && fn.getLstOperands().get(0) instanceof VarExprent ve) {
+      retVar = ve;
+    }
+    if (retVar == null || retVar.getIndex() != copyVar.getIndex() || retVar.getVersion() != copyVar.getVersion()) return false;
+
+    // All checks pass. Fold: create field++ and replace copy in return.
+    FunctionType type = func.getFuncType() == FunctionType.ADD ? FunctionType.IPP : FunctionType.IMM;
+    FunctionExprent postInc = new FunctionExprent(type, field, func.bytecode);
+    postInc.setImplicitType(VarType.VARTYPE_INT);
+
+    // Replace the copy var in the return with the post-increment expression
+    if (retVal instanceof VarExprent) {
+      exit.replaceExprent(retVal, postInc);
+    } else if (retVal instanceof FunctionExprent fn) {
+      fn.getLstOperands().set(0, postInc);
+    }
+
+    // Remove first two statements (copy assignment and increment)
+    list.remove(index + 1); // remove increment
+    list.remove(index);     // remove copy assignment
+    return true;
   }
 
   /**
