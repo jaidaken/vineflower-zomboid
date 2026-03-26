@@ -672,8 +672,13 @@ public class SimplifyExprentsHelper {
       return false;
     }
 
-    // The copy variable must be a stack variable
-    if (!(af.getLeft() instanceof VarExprent copyVar) || !copyVar.isStack()) {
+    // The copy variable must be a stack variable (safe from var merge bugs)
+    // or the incremented source must be a field (field access doesn't go
+    // through var versioning, so no merge risk).
+    if (!(af.getLeft() instanceof VarExprent copyVar)) {
+      return false;
+    }
+    if (!copyVar.isStack() && !(af.getRight() instanceof FieldExprent)) {
       return false;
     }
 
@@ -692,7 +697,7 @@ public class SimplifyExprentsHelper {
       return false;
     }
 
-    // There must be a following expression that uses the copy var as an array index
+    // There must be a following expression that uses the copy var
     if (index + 2 >= list.size()) {
       return false;
     }
