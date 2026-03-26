@@ -4,6 +4,7 @@ package org.jetbrains.java.decompiler.modules.decompiler.vars;
 import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
 import org.jetbrains.java.decompiler.modules.decompiler.ValidationHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.DirectGraph;
@@ -46,8 +47,15 @@ public class VarTypeProcessor {
 
     resetExprentTypes(graph);
 
-    //noinspection StatementWithEmptyBody
-    while (!processVarTypes(graph)) ;
+    int iterations = 0;
+    while (!processVarTypes(graph)) {
+      if (++iterations > 1000) {
+        DecompilerContext.getLogger().writeMessage(
+          "Type processing did not converge after 1000 iterations for " + method.getName(),
+          IFernflowerLogger.Severity.WARN);
+        break;
+      }
+    }
 
     ValidationHelper.validateVars(graph, root, var -> var.getVarType() != VarType.VARTYPE_UNKNOWN, "Var type not set!");
   }
