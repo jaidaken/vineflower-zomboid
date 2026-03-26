@@ -889,8 +889,12 @@ public class ExprProcessor implements CodeConstants {
       // Different LHS variables
       if (varA.getIndex() == varB.getIndex()) continue;
 
-      // Chain: first becomes a = (b = value), remove second
-      asf.setRight(ass);
+      // Chain: second = (first = value) so javac stores first's slot first
+      // (matching the original dup; fstore first; fstore second order).
+      // javac evaluates chained assignments right-to-left, so the inner
+      // assignment (first) gets fstore'd before the outer (second).
+      ass.setRight(asf);
+      result.set(i, ass);
       result.remove(i + 1);
     }
     return result;
