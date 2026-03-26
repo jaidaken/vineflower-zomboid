@@ -671,29 +671,42 @@ public class VarDefinitionHelper {
       return false;
     }
 
-    // For try-catch: check if the variable is assigned in the try body.
-    // The variable is definitely assigned if the try body assigns it,
-    // because exceptions route to the catch handler (which is a separate path).
-    // For try-catch: check if the variable is assigned in the try body.
-    // Only consider it definitely assigned if the FIRST exprent in the try body
-    // assigns it (before any exception-throwing code could run).
+    // For try-catch: two cases where the variable is definitely assigned:
+    // 1. The FIRST statement in the try body assigns it (before exceptions)
+    // 2. The try body assigns it AND all catch handlers terminate (return/throw),
+    //    so post-try code only executes if the try completed normally.
     if (stat.type == Statement.StatementType.TRY_CATCH || stat.type == Statement.StatementType.CATCH_ALL) {
       if (stat.getFirst() != null) {
         Statement tryBody = stat.getFirst();
-        // Only check the first basic block or sequence - not recursively
-        // This ensures the assignment happens before any exception-throwing code
+        // Case 1: first exprent assigns the variable
         if (tryBody.getExprents() != null && !tryBody.getExprents().isEmpty()) {
-          Exprent firstExpr = tryBody.getExprents().get(0);
-          if (exprAssignsVar(firstExpr, varIndex)) {
+          if (exprAssignsVar(tryBody.getExprents().get(0), varIndex)) {
             return true;
           }
         } else if (tryBody.type == Statement.StatementType.SEQUENCE && !tryBody.getStats().isEmpty()) {
           Statement firstChild = tryBody.getStats().get(0);
           if (firstChild.getExprents() != null && !firstChild.getExprents().isEmpty()) {
-            Exprent firstExpr = firstChild.getExprents().get(0);
-            if (exprAssignsVar(firstExpr, varIndex)) {
+            if (exprAssignsVar(firstChild.getExprents().get(0), varIndex)) {
               return true;
             }
+          }
+        }
+        // Case 2: variable is assigned somewhere in the try body AND all catch
+        // handlers terminate (return/throw). Per JLS §16, V is DA after try-catch
+        // if V is DA after try body AND V is DA after each catch block.
+        // Since terminating catch blocks are vacuously DA, we only need the try body.
+        if (stat.type == Statement.StatementType.TRY_CATCH) {
+          CatchStatement catchStat = (CatchStatement) stat;
+          boolean allCatchesTerminate = true;
+          for (int i = 1; i < catchStat.getStats().size(); i++) {
+            Statement catchHandler = catchStat.getStats().get(i);
+            if (!statementTerminates(catchHandler)) {
+              allCatchesTerminate = false;
+              break;
+            }
+          }
+          if (allCatchesTerminate && isDefinitelyAssignedImpl(tryBody, varIndex, depth + 1)) {
+            return true;
           }
         }
       }
@@ -780,6 +793,33 @@ public class VarDefinitionHelper {
    * Unlike exprAssignsVar, this checks nested sub-expressions (e.g., assignments
    * inside comparison operators: (x = read()) != -1).
    */
+  /**
+   * Checks if a statement always terminates (return, throw, break, continue)
+   * and never falls through to the next statement.
+   */
+  private static boolean statementTerminates(Statement stat) {
+    if (stat.getExprents() != null) {
+      if (!stat.getExprents().isEmpty()) {
+        Exprent last = stat.getExprents().get(stat.getExprents().size() - 1);
+        if (last instanceof ExitExprent) return true;
+      }
+      return false;
+    }
+    // For sequences, check if the last child terminates
+    if (stat.type == Statement.StatementType.SEQUENCE && !stat.getStats().isEmpty()) {
+      return statementTerminates(stat.getStats().get(stat.getStats().size() - 1));
+    }
+    // For if-else, both branches must terminate
+    if (stat.type == Statement.StatementType.IF) {
+      IfStatement ifStat = (IfStatement) stat;
+      if (ifStat.getIfstat() != null && ifStat.getElsestat() != null) {
+        return statementTerminates(ifStat.getIfstat()) && statementTerminates(ifStat.getElsestat());
+      }
+      return ifStat.getIfstat() != null && statementTerminates(ifStat.getIfstat());
+    }
+    return false;
+  }
+
   private static boolean exprAssignsVarDeep(Exprent expr, int varIndex) {
     if (expr instanceof AssignmentExprent assign) {
       Exprent left = assign.getLeft();
