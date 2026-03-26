@@ -609,6 +609,13 @@ public class VarDefinitionHelper {
       return true;
     }
 
+    // For while/for loops: not handled - the condition assignment is complex
+    // and interacts with declaration scoping. Skip.
+    if (stat.type == Statement.StatementType.DO) {
+      debugLog(indent + "DO: skipped (complex scoping)");
+      return false;
+    }
+
     if (stat.type == Statement.StatementType.ROOT && stat.getFirst() != null) {
       return isDefinitelyAssignedImpl(stat.getFirst(), varIndex, depth);
     }
@@ -684,6 +691,29 @@ public class VarDefinitionHelper {
   }
 
   /** Check if an expression assigns to a variable (handles chained assignments like a = b = c). */
+  /**
+   * Deep check: does the expression tree contain an assignment to varIndex?
+   * Unlike exprAssignsVar, this checks nested sub-expressions (e.g., assignments
+   * inside comparison operators: (x = read()) != -1).
+   */
+  private static boolean exprAssignsVarDeep(Exprent expr, int varIndex) {
+    if (expr instanceof AssignmentExprent assign) {
+      Exprent left = assign.getLeft();
+      if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) {
+        return true;
+      }
+    }
+    for (Exprent sub : expr.getAllExprents(true)) {
+      if (sub instanceof AssignmentExprent assign) {
+        Exprent left = assign.getLeft();
+        if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   private static boolean exprAssignsVar(Exprent expr, int varIndex) {
     if (!(expr instanceof AssignmentExprent)) return false;
     AssignmentExprent assign = (AssignmentExprent) expr;
