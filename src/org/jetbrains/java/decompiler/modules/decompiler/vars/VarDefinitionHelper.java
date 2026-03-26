@@ -261,29 +261,53 @@ public class VarDefinitionHelper {
 
       Statement first = findFirstBlock(stat, index);
 
-      List<Exprent> lst;
+      List<Exprent> lst = null;
       if (first == null) {
         lst = stat.getVarDefinitions();
       } else if (first.getExprents() == null) {
-        // RTF: For compound statements like DoStatement (while/for loops),
-        // placing declarations in varDefinitions can silently drop them.
-        // Instead, place in the parent sequence's preceding basic block
-        // or the parent's varDefinitions to ensure visibility.
-        if (DecompilerContext.isRoundtripFidelity() && first.type == Statement.StatementType.DO
-            && first.getParent() != null && first.getParent().type == Statement.StatementType.SEQUENCE) {
-          Statement parent = first.getParent();
-          // Find the child just before the DoStatement in the sequence
-          List<Statement> seqChildren = parent.getStats();
-          int doIndex = seqChildren.indexOf(first);
-          if (doIndex > 0) {
-            Statement prev = seqChildren.get(doIndex - 1);
-            if (prev.getExprents() != null) {
-              lst = prev.getExprents();
-            } else {
-              lst = parent.getVarDefinitions();
+        // RTF: For compound statements (DoStatement, CatchStatement, etc.),
+        // placing bare VarExprent declarations in varDefinitions can silently
+        // drop them during rendering. Walk up to find an exprents list or a
+        // sequence's preceding basic block.
+        if (DecompilerContext.isRoundtripFidelity()) {
+          boolean placed = false;
+          Statement cur = first;
+          // Walk up the parent chain to find a suitable placement
+          while (cur.getParent() != null && !placed) {
+            Statement parent = cur.getParent();
+            if (parent.type == Statement.StatementType.SEQUENCE) {
+              List<Statement> seqChildren = parent.getStats();
+              int stIndex = seqChildren.indexOf(cur);
+              if (stIndex > 0) {
+                // Find the last basic block before this statement
+                for (int si = stIndex - 1; si >= 0; si--) {
+                  Statement prev = seqChildren.get(si);
+                  if (prev.getExprents() != null) {
+                    lst = prev.getExprents();
+                    placed = true;
+                    break;
+                  }
+                }
+              }
+              if (!placed) {
+                lst = parent.getVarDefinitions();
+                placed = true;
+              }
+              break;
             }
-          } else {
-            lst = parent.getVarDefinitions();
+            cur = parent;
+          }
+          if (!placed) {
+            // Last resort: try to find the first basic block inside the compound statement
+            Statement inner = first;
+            while (inner != null && inner.getExprents() == null && !inner.getStats().isEmpty()) {
+              inner = inner.getFirst();
+            }
+            if (inner != null && inner.getExprents() != null) {
+              lst = inner.getExprents();
+            } else {
+              lst = first.getVarDefinitions();
+            }
           }
         } else {
           lst = first.getVarDefinitions();
@@ -642,6 +666,35 @@ public class VarDefinitionHelper {
         Exprent cond = doStat.getConditionExprent();
         if (cond != null && exprAssignsVarDeep(cond, varIndex)) {
           return true;
+        }
+      }
+      return false;
+    }
+
+    // For try-catch: check if the variable is assigned in the try body.
+    // The variable is definitely assigned if the try body assigns it,
+    // because exceptions route to the catch handler (which is a separate path).
+    // For try-catch: check if the variable is assigned in the try body.
+    // Only consider it definitely assigned if the FIRST exprent in the try body
+    // assigns it (before any exception-throwing code could run).
+    if (stat.type == Statement.StatementType.TRY_CATCH || stat.type == Statement.StatementType.CATCH_ALL) {
+      if (stat.getFirst() != null) {
+        Statement tryBody = stat.getFirst();
+        // Only check the first basic block or sequence - not recursively
+        // This ensures the assignment happens before any exception-throwing code
+        if (tryBody.getExprents() != null && !tryBody.getExprents().isEmpty()) {
+          Exprent firstExpr = tryBody.getExprents().get(0);
+          if (exprAssignsVar(firstExpr, varIndex)) {
+            return true;
+          }
+        } else if (tryBody.type == Statement.StatementType.SEQUENCE && !tryBody.getStats().isEmpty()) {
+          Statement firstChild = tryBody.getStats().get(0);
+          if (firstChild.getExprents() != null && !firstChild.getExprents().isEmpty()) {
+            Exprent firstExpr = firstChild.getExprents().get(0);
+            if (exprAssignsVar(firstExpr, varIndex)) {
+              return true;
+            }
+          }
         }
       }
       return false;
