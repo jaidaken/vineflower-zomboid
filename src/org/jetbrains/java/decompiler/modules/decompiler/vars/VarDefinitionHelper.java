@@ -609,10 +609,10 @@ public class VarDefinitionHelper {
       return true;
     }
 
-    // For while/for loops: the condition assignment pattern (while ((x = read()) != -1))
-    // yields +38 EXACT when enabled, but causes 162 compile errors because variable
-    // declarations get dropped in full-project decompilation. Needs investigation into
-    // why findFirstBlock/definition placement loses the declaration.
+    // For while/for loops: condition-assignment pattern (while ((x = read()) != -1))
+    // yields +38 EXACT but bare VarExprent declarations in DoStatement.varDefinitions
+    // are silently dropped during rendering. Needs fix in declaration rendering before
+    // enabling. The exprAssignsVarDeep helper is ready.
     if (stat.type == Statement.StatementType.DO) {
       return false;
     }
