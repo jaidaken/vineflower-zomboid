@@ -698,7 +698,21 @@ public class SimplifyExprentsHelper {
     }
 
     Exprent following = list.get(index + 2);
-    return isVarUsedOnlyAsArrayIndex(copyVar, following);
+    // Safe if the copy var is used only as an array index
+    if (isVarUsedOnlyAsArrayIndex(copyVar, following)) {
+      return true;
+    }
+    // Also safe if the copy var is used only as the right-hand side of a field assignment.
+    // Pattern: copy = this.field; this.field++; target.field = copy;
+    // This reconstructs to: target.field = this.field++;
+    if (following instanceof AssignmentExprent followAssign
+        && followAssign.getLeft() instanceof FieldExprent
+        && followAssign.getRight() instanceof VarExprent followVar
+        && followVar.getIndex() == copyVar.getIndex()
+        && followVar.getVersion() == copyVar.getVersion()) {
+      return true;
+    }
+    return false;
   }
 
   /**

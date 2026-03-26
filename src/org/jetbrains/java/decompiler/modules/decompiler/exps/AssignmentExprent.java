@@ -74,6 +74,18 @@ public class AssignmentExprent extends Exprent {
         ? right.getInferredExprType(null) : right.getExprType();
     if (typeRight == null) typeRight = right.getExprType();
 
+    // For compound assignments (+=, -=, etc.), the right side has been simplified
+    // from "var + expr" to just "expr". But the actual computed value undergoes
+    // binary numeric promotion (JLS 5.6.2), which promotes integer operands to
+    // at least int. Without this, a variable like "int i; i += 4" gets incorrectly
+    // narrowed to byte because the constant 4 fits in a byte.
+    // The compound assignment transformation only happens when there is no narrowing
+    // cast (i2b/i2s/i2c), so reaching here with condType set means the original
+    // variable was at least int.
+    if (condType != null && typeRight.typeFamily == TypeFamily.INTEGER) {
+      typeRight = VarType.VARTYPE_INT;
+    }
+
     if (typeLeft.typeFamily.isGreater(typeRight.typeFamily)) {
       result.addMinTypeExprent(right, VarType.getMinTypeInFamily(typeLeft.typeFamily));
     } else if (typeLeft.typeFamily.isLesser(typeRight.typeFamily)) {
