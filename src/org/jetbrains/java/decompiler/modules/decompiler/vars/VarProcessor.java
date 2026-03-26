@@ -54,6 +54,13 @@ public class VarProcessor {
     this.clashingNames.putAll(varDef.getClashingNames());
   }
 
+  /** Get the mapping from Vineflower var index to original bytecode slot. */
+  public int getOriginalVarIndex(int newIndex) {
+    if (varVersions == null) return newIndex;
+    VarVersionPair orig = varVersions.getMapOriginalVarIndices().get(newIndex);
+    return orig != null ? orig.var : newIndex;
+  }
+
   public void setDebugVarNames(RootStatement root, Map<VarVersionPair, String> mapDebugVarNames) {
     if (varVersions == null) {
       return;
