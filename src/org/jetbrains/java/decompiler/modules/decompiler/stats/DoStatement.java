@@ -7,12 +7,14 @@ import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.InvocationExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Pattern;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
 import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
+import org.jetbrains.java.decompiler.struct.gen.generics.GenericClassDescriptor;
 import org.jetbrains.java.decompiler.util.TextBuffer;
 
 import java.util.ArrayList;
@@ -28,6 +30,12 @@ public class DoStatement extends Statement {
   private Type looptype;
 
   private boolean rtfForceForEachVar = false;
+
+  // RTF: preserved from the original .iterator() InvocationExprent before it's discarded
+  // during for-each conversion in MergeHelper.matchForEach(). Used to emit the correct
+  // cast type (matching the original invokevirtual/invokeinterface dispatch).
+  private String rtfIteratorClassname = null;
+  private InvocationExprent.InvocationType rtfIteratorInvocationType = null;
 
   private final List<Exprent> initExprent = new ArrayList<>();
   private final List<Exprent> conditionExprent = new ArrayList<>();
@@ -154,12 +162,9 @@ public class DoStatement extends Statement {
         incExprent.get(0).getInferredExprType(null); //TODO: Find a better then null? For now just calls it to clear casts if needed
         TextBuffer iterBuf = incExprent.get(0).toJava(indent);
         // RTF: when the for-each variable type is specific (narrowed from Object)
-        // but the iterable is a raw collection, cast the iterable to Iterable<Type>
-        // so javac accepts the element type.
-        // Note: this changes invokevirtual ArrayList.iterator() to invokeinterface
-        // Iterable.iterator() for concrete collections (+2 bytes per loop). Fixing
-        // this requires casting to the concrete type, but that breaks when the
-        // collection has existing generics or inner class types.
+        // but the iterable is a raw collection, cast the iterable so javac accepts
+        // the element type. Uses the original .iterator() receiver class (preserved
+        // from MergeHelper) to match the original invokevirtual/invokeinterface dispatch.
         if (DecompilerContext.isRoundtripFidelity() && initExprent.get(0) instanceof VarExprent) {
           VarExprent feVar = (VarExprent) initExprent.get(0);
           VarType feType = feVar.getVarType();
@@ -173,7 +178,40 @@ public class DoStatement extends Statement {
               if (iterExpr.getPrecedence() >= FunctionExprent.FunctionType.CAST.precedence) {
                 iterBuf = iterBuf.encloseWithParens();
               }
-              iterBuf = iterBuf.enclose("(Iterable<" + typeStr + ">)(Iterable<?>)", "");
+              // Use the original iterator receiver class instead of always Iterable.
+              // This preserves the original dispatch: invokevirtual for concrete classes
+              // (ArrayList, etc.) and invokeinterface for interfaces (Iterable, List, etc.)
+              String castClass = "Iterable";
+              boolean skipCast = false;
+              if (rtfIteratorClassname != null) {
+                // Check if the iterator class accepts type parameters.
+                // Non-generic classes (e.g., EdgeRing extends ArrayList<Edge>) don't
+                // take type parameters, so casting to (EdgeRing<Edge>) would be invalid.
+                // For these classes, the element type is already inferrable from the
+                // generic superclass, so skip the cast entirely.
+                boolean classIsGeneric = true;
+                StructClass iterStruct = DecompilerContext.getStructContext() != null
+                    ? DecompilerContext.getStructContext().getClass(rtfIteratorClassname) : null;
+                if (iterStruct != null) {
+                  GenericClassDescriptor sig = iterStruct.getSignature();
+                  if (sig != null && sig.fparameters.isEmpty()) {
+                    // Class has a generic signature but no type parameters (e.g., EdgeRing extends ArrayList<Edge>)
+                    // Element type is inferrable from the class hierarchy - skip the cast
+                    skipCast = true;
+                    classIsGeneric = false;
+                  } else if (sig == null) {
+                    // No generic signature at all - check if it's a well-known generic class
+                    // (library classes like ArrayList may not have StructClass entries)
+                    classIsGeneric = true;
+                  }
+                }
+                if (classIsGeneric) {
+                  castClass = ExprProcessor.getCastTypeName(new VarType(rtfIteratorClassname, true));
+                }
+              }
+              if (!skipCast) {
+                iterBuf = iterBuf.enclose("(" + castClass + "<" + typeStr + ">)(" + castClass + "<?>)", "");
+              }
             }
           }
         }
@@ -313,5 +351,21 @@ public class DoStatement extends Statement {
 
   public void setRtfForceForEachVar(boolean val) {
     this.rtfForceForEachVar = val;
+  }
+
+  public String getRtfIteratorClassname() {
+    return rtfIteratorClassname;
+  }
+
+  public void setRtfIteratorClassname(String rtfIteratorClassname) {
+    this.rtfIteratorClassname = rtfIteratorClassname;
+  }
+
+  public InvocationExprent.InvocationType getRtfIteratorInvocationType() {
+    return rtfIteratorInvocationType;
+  }
+
+  public void setRtfIteratorInvocationType(InvocationExprent.InvocationType rtfIteratorInvocationType) {
+    this.rtfIteratorInvocationType = rtfIteratorInvocationType;
   }
 }

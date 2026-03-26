@@ -703,6 +703,14 @@ public class MergeHelper {
           stat.getInitExprent().getBytecodeRange(ass.getLeft().bytecode);
         }
 
+        // RTF: preserve the .iterator() call metadata before the InvocationExprent is discarded.
+        // DoStatement rendering uses this to cast to the correct receiver type, matching the
+        // original invokevirtual/invokeinterface dispatch.
+        if (DecompilerContext.isRoundtripFidelity()) {
+          stat.setRtfIteratorClassname(holder.getClassname());
+          stat.setRtfIteratorInvocationType(holder.getInvocationType());
+        }
+
         stat.setLooptype(DoStatement.Type.FOR_EACH);
         stat.setInitExprent(ass.getLeft());
         stat.setIncExprent(holder.getInstance());
