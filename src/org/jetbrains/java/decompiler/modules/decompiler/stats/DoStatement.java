@@ -9,6 +9,8 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Pattern;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
+import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.TextBuffer;
@@ -154,19 +156,18 @@ public class DoStatement extends Statement {
         // RTF: when the for-each variable type is specific (narrowed from Object)
         // but the iterable is a raw collection, cast the iterable to Iterable<Type>
         // so javac accepts the element type.
+        // Note: this changes invokevirtual ArrayList.iterator() to invokeinterface
+        // Iterable.iterator() for concrete collections (+2 bytes per loop). Fixing
+        // this requires casting to the concrete type, but that breaks when the
+        // collection has existing generics or inner class types.
         if (DecompilerContext.isRoundtripFidelity() && initExprent.get(0) instanceof VarExprent) {
           VarExprent feVar = (VarExprent) initExprent.get(0);
           VarType feType = feVar.getVarType();
-          // Check if the variable is typed as something specific (not Object/var)
           if (feType != null && feType.type == CodeType.OBJECT
               && !"java/lang/Object".equals(feType.value)
               && !feVar.isUseVar()) {
-            // Check if the iterable is a raw collection (its type doesn't carry generic info)
             VarType iterType = incExprent.get(0).getExprType();
             if (iterType.type == CodeType.OBJECT && iterType.arrayDim == 0) {
-              // The iterable is a non-array OBJECT type. If the for-each var is narrowed,
-              // we need a cast. Emit: (Iterable<Type>)(Iterable<?>)iterable
-              // Wrap in parentheses if the iterable is a low-precedence expression (ternary, etc.)
               String typeStr = ExprProcessor.getCastTypeName(feType);
               Exprent iterExpr = incExprent.get(0);
               if (iterExpr.getPrecedence() >= FunctionExprent.FunctionType.CAST.precedence) {
