@@ -233,6 +233,15 @@ public class SimplifyExprentsHelper {
         continue;
       }
 
+      // RTF: chain consecutive assignments with same RHS into a = b = value.
+      // javac compiles chained assignments with dup, matching the original bytecode.
+      // DISABLED: causes cascading regressions - needs deeper investigation
+      // if (DecompilerContext.isRoundtripFidelity() && isChainableAssignment(current, next)) {
+      //   list.remove(index + 1);
+      //   res = true;
+      //   continue;
+      // }
+
       if (!firstInvocation && isStackAssignment2(current, next)) {
         list.remove(index + 1);
         res = true;
@@ -511,6 +520,74 @@ public class SimplifyExprentsHelper {
    * This is also why it replaces the first assignment, and deleting the second, instead of
    * just deleting the second.
    */
+  /**
+   * RTF: chain two consecutive assignments with the same RHS into a = b = value.
+   * javac compiles chained assignments with dup, matching original bytecode that
+   * uses dup to assign one value to two local variables.
+   *
+   * Strict requirements to avoid incorrect chaining:
+   * - Both LHS must be local variables (not fields, arrays, or complex expressions)
+   * - RHS must be a simple load (variable, field, or constant)
+   * - Neither LHS can be the same variable as the RHS (would be sequential, not parallel)
+   * - The RHS variable must not appear in either LHS
+   */
+  private static boolean isChainableAssignment(Exprent first, Exprent second) {
+    if (!(first instanceof AssignmentExprent asf) || !(second instanceof AssignmentExprent ass)) {
+      return false;
+    }
+    // Both LHS must be simple local variables
+    if (!(asf.getLeft() instanceof VarExprent varA) || !(ass.getLeft() instanceof VarExprent varB)) {
+      return false;
+    }
+    // Same RHS expression
+    if (!asf.getRight().equals(ass.getRight())) {
+      return false;
+    }
+    // Don't chain if either side is already a chained assignment
+    if (asf.getRight() instanceof AssignmentExprent || ass.getRight() instanceof AssignmentExprent) {
+      return false;
+    }
+    // RHS must be a parameter/argument variable load or a field load on a
+    // different object than either LHS. Constants are also safe.
+    Exprent rhs = asf.getRight();
+    if (rhs instanceof ConstExprent) {
+      // Constants are always safe to chain
+    } else if (rhs instanceof VarExprent rhsVar) {
+      // Must not be either LHS variable
+      if (rhsVar.getIndex() == varA.getIndex() || rhsVar.getIndex() == varB.getIndex()) {
+        return false;
+      }
+    } else if (rhs instanceof FieldExprent fieldRhs) {
+      // Field load is safe if neither LHS appears in the field's instance
+      if (fieldRhs.getInstance() != null && fieldRhs.getInstance().containsExprent(asf.getLeft())) {
+        return false;
+      }
+    } else {
+      // No other RHS types - too risky
+      return false;
+    }
+    // LHS variables must be different
+    if (varA.getIndex() == varB.getIndex()) {
+      return false;
+    }
+    // Neither LHS variable index can appear anywhere in the other assignment
+    if (exprContainsVarIndex(ass.getRight(), varA.getIndex()) || exprContainsVarIndex(asf.getRight(), varB.getIndex())) {
+      return false;
+    }
+    // Chain: first becomes a = (b = value)
+    asf.setRight(ass);
+    return true;
+  }
+
+  /** Check if an expression tree contains any VarExprent with the given index. */
+  private static boolean exprContainsVarIndex(Exprent expr, int varIndex) {
+    if (expr instanceof VarExprent ve && ve.getIndex() == varIndex) return true;
+    for (Exprent sub : expr.getAllExprents(true)) {
+      if (sub instanceof VarExprent ve && ve.getIndex() == varIndex) return true;
+    }
+    return false;
+  }
+
   private static boolean isStackAssignment(Exprent first, Exprent second) {
     if (first instanceof AssignmentExprent && second instanceof AssignmentExprent) {
       AssignmentExprent asf = (AssignmentExprent) first;
