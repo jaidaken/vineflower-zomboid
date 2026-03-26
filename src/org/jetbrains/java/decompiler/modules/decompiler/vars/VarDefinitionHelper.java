@@ -363,6 +363,91 @@ public class VarDefinitionHelper {
   }
 
 
+  /**
+   * RTF: sort variable declarations in each statement's varDefinitions and exprents
+   * lists by var index, so javac assigns matching slot numbers.
+   */
+  private static void sortVarDeclarationsByIndex(Statement stat) {
+    // Sort varDefinitions list
+    List<Exprent> varDefs = stat.getVarDefinitions();
+    if (varDefs.size() > 1) {
+      varDefs.sort((a, b) -> {
+        int idxA = getVarIndex(a);
+        int idxB = getVarIndex(b);
+        if (idxA == Integer.MAX_VALUE || idxB == Integer.MAX_VALUE) return 0;
+        return Integer.compare(idxA, idxB);
+      });
+    }
+
+    // Sort consecutive var declarations at the start of exprents lists
+    if (stat.getExprents() != null) {
+      sortLeadingDeclarations(stat.getExprents());
+    }
+
+    // Recurse into child statements
+    for (Statement child : stat.getStats()) {
+      sortVarDeclarationsByIndex(child);
+    }
+  }
+
+  /** Sort leading variable declarations that have no inter-dependencies by var index. */
+  private static void sortLeadingDeclarations(List<Exprent> exprents) {
+    // Find the range of leading declarations that can be safely reordered.
+    // Safe declarations: bare (no init), constant init (= 0.0F, = null), or
+    // init that only depends on method parameters (which are already in scope).
+    int declEnd = 0;
+    for (int i = 0; i < exprents.size(); i++) {
+      Exprent expr = exprents.get(i);
+      if (isSafeToReorderDecl(expr)) {
+        declEnd = i + 1;
+      } else {
+        break;
+      }
+    }
+    if (declEnd <= 1) return;
+
+    List<Exprent> decls = new ArrayList<>(exprents.subList(0, declEnd));
+    decls.sort((a, b) -> Integer.compare(getVarIndex(a), getVarIndex(b)));
+    for (int i = 0; i < declEnd; i++) {
+      exprents.set(i, decls.get(i));
+    }
+  }
+
+  /** Check if a declaration can be safely reordered (no dependency on other local vars). */
+  private static boolean isSafeToReorderDecl(Exprent expr) {
+    // Bare declaration: always safe
+    if (expr instanceof VarExprent ve && ve.isDefinition()) return true;
+    // Assignment with definition: safe if RHS has no local var dependencies
+    if (expr instanceof AssignmentExprent ae && ae.getLeft() instanceof VarExprent ve && ve.isDefinition()) {
+      return !exprHasLocalVarDeps(ae.getRight());
+    }
+    return false;
+  }
+
+  /** Check if an expression references any local variables (not parameters). */
+  private static boolean exprHasLocalVarDeps(Exprent expr) {
+    // Constants, field loads on 'this' are safe (no local var deps)
+    if (expr instanceof ConstExprent) return false;
+    // Check all sub-expressions for VarExprents
+    for (Exprent sub : expr.getAllExprents(true)) {
+      if (sub instanceof VarExprent) return true;
+    }
+    if (expr instanceof VarExprent) return true;
+    return false;
+  }
+
+  private static boolean isVarDeclaration(Exprent expr) {
+    if (expr instanceof VarExprent ve) return ve.isDefinition();
+    if (expr instanceof AssignmentExprent ae && ae.getLeft() instanceof VarExprent ve) return ve.isDefinition();
+    return false;
+  }
+
+  private static int getVarIndex(Exprent expr) {
+    if (expr instanceof VarExprent ve) return ve.getIndex();
+    if (expr instanceof AssignmentExprent ae && ae.getLeft() instanceof VarExprent ve) return ve.getIndex();
+    return Integer.MAX_VALUE;
+  }
+
   // *****************************************************************************
   // private methods
   // *****************************************************************************
