@@ -798,7 +798,57 @@ public class SimplifyExprentsHelper {
         && followVar.getVersion() == copyVar.getVersion()) {
       return true;
     }
+    // Also safe if the copy var is used as a method argument in the following expression.
+    // Pattern: copy = this.field; this.field++; x = this.method(copy);
+    // This reconstructs to: x = this.method(this.field++);
+    if (isVarUsedOnlyAsMethodArg(copyVar, following)) {
+      return true;
+    }
     return false;
+  }
+
+  /**
+   * Checks that a variable appears in the expression tree ONLY as a parameter of an InvocationExprent.
+   */
+  private static boolean isVarUsedOnlyAsMethodArg(VarExprent var, Exprent expr) {
+    // The expression should be an assignment whose RHS contains a method call with the var as arg
+    Exprent toCheck = expr;
+    if (expr instanceof AssignmentExprent ae) {
+      // The var must not be on the LHS
+      if (ae.getLeft() instanceof VarExprent ve
+          && ve.getIndex() == var.getIndex() && ve.getVersion() == var.getVersion()) {
+        return false;
+      }
+      toCheck = ae.getRight();
+    }
+    // Walk the expression tree to find the var
+    boolean[] found = {false};
+    if (!checkVarAsMethodArgOnly(var, toCheck, null, found)) {
+      return false;
+    }
+    return found[0];
+  }
+
+  private static boolean checkVarAsMethodArgOnly(VarExprent var, Exprent expr, Exprent parent, boolean[] found) {
+    if (expr instanceof VarExprent ve) {
+      if (ve.getIndex() == var.getIndex() && ve.getVersion() == var.getVersion()) {
+        // Check that parent is an InvocationExprent and this var is a parameter
+        if (parent instanceof InvocationExprent inv) {
+          if (inv.getLstParameters().contains(expr)) {
+            found[0] = true;
+            return true;
+          }
+        }
+        return false; // var used in non-method-arg position
+      }
+      return true;
+    }
+    for (Exprent sub : expr.getAllExprents()) {
+      if (!checkVarAsMethodArgOnly(var, sub, expr, found)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
