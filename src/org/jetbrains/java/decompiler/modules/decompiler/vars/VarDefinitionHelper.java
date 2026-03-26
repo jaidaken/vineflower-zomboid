@@ -609,10 +609,11 @@ public class VarDefinitionHelper {
       return true;
     }
 
-    // For while/for loops: not handled - the condition assignment is complex
-    // and interacts with declaration scoping. Skip.
+    // For while/for loops: the condition assignment pattern (while ((x = read()) != -1))
+    // yields +38 EXACT when enabled, but causes 162 compile errors because variable
+    // declarations get dropped in full-project decompilation. Needs investigation into
+    // why findFirstBlock/definition placement loses the declaration.
     if (stat.type == Statement.StatementType.DO) {
-      debugLog(indent + "DO: skipped (complex scoping)");
       return false;
     }
 
