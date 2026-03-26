@@ -871,34 +871,23 @@ public class ExprProcessor implements CodeConstants {
       if (!(first instanceof AssignmentExprent asf) || !(second instanceof AssignmentExprent ass)) continue;
       if (!(asf.getLeft() instanceof VarExprent varA) || !(ass.getLeft() instanceof VarExprent varB)) continue;
 
-      // Skip if either is a variable definition (would produce "Type a = Type b = value")
+      // CRITICAL: only chain when the RHS expressions share a bytecode offset,
+      // meaning the value came from the same load (duplicated by dup).
+      // Separate load instructions have different offsets.
+      Exprent rhsA = asf.getRight();
+      Exprent rhsB = ass.getRight();
+      if (rhsA.bytecode == null || rhsB.bytecode == null || !rhsA.bytecode.intersects(rhsB.bytecode)) continue;
+
+      // Skip definitions
       if (varA.isDefinition() || varB.isDefinition()) continue;
 
-      // Same RHS
+      // Same RHS, simple expression
       if (!asf.getRight().equals(ass.getRight())) continue;
-
-      // RHS must not be an assignment (no cascading)
-      if (asf.getRight() instanceof AssignmentExprent) continue;
-
-      // RHS must be simple
       Exprent rhs = asf.getRight();
       if (!(rhs instanceof VarExprent) && !(rhs instanceof FieldExprent) && !(rhs instanceof ConstExprent)) continue;
 
-      // Different LHS variables with the same type
+      // Different LHS variables
       if (varA.getIndex() == varB.getIndex()) continue;
-      if (!varA.getVarType().equals(varB.getVarType())) continue;
-
-      // RHS var must not be either LHS
-      if (rhs instanceof VarExprent rhsVar) {
-        if (rhsVar.getIndex() == varA.getIndex() || rhsVar.getIndex() == varB.getIndex()) continue;
-      }
-
-      // Neither LHS appears in the other's subtree
-      boolean crossRef = false;
-      for (Exprent sub : ass.getRight().getAllExprents(true)) {
-        if (sub instanceof VarExprent ve && ve.getIndex() == varA.getIndex()) { crossRef = true; break; }
-      }
-      if (crossRef) continue;
 
       // Chain: first becomes a = (b = value), remove second
       asf.setRight(ass);
@@ -979,6 +968,11 @@ public class ExprProcessor implements CodeConstants {
 
     TextBuffer buf = new TextBuffer();
     lst = Exprent.sortIndexed(lst);
+
+    // RTF: chain consecutive assignments that share a bytecode offset (from dup).
+    if (DecompilerContext.isRoundtripFidelity() && lst.size() >= 2) {
+      lst = chainDupAssignments(lst);
+    }
 
     for (Exprent expr : lst) {
       if (buf.length() > 0 && expr instanceof VarExprent && ((VarExprent)expr).isClassDef()) {
