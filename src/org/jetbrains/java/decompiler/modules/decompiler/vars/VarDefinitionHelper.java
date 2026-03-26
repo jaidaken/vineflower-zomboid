@@ -265,7 +265,29 @@ public class VarDefinitionHelper {
       if (first == null) {
         lst = stat.getVarDefinitions();
       } else if (first.getExprents() == null) {
-        lst = first.getVarDefinitions();
+        // RTF: For compound statements like DoStatement (while/for loops),
+        // placing declarations in varDefinitions can silently drop them.
+        // Instead, place in the parent sequence's preceding basic block
+        // or the parent's varDefinitions to ensure visibility.
+        if (DecompilerContext.isRoundtripFidelity() && first.type == Statement.StatementType.DO
+            && first.getParent() != null && first.getParent().type == Statement.StatementType.SEQUENCE) {
+          Statement parent = first.getParent();
+          // Find the child just before the DoStatement in the sequence
+          List<Statement> seqChildren = parent.getStats();
+          int doIndex = seqChildren.indexOf(first);
+          if (doIndex > 0) {
+            Statement prev = seqChildren.get(doIndex - 1);
+            if (prev.getExprents() != null) {
+              lst = prev.getExprents();
+            } else {
+              lst = parent.getVarDefinitions();
+            }
+          } else {
+            lst = parent.getVarDefinitions();
+          }
+        } else {
+          lst = first.getVarDefinitions();
+        }
       } else {
         lst = first.getExprents();
       }
@@ -609,11 +631,19 @@ public class VarDefinitionHelper {
       return true;
     }
 
-    // For while/for loops: condition-assignment pattern (while ((x = read()) != -1))
-    // yields +38 EXACT but bare VarExprent declarations in DoStatement.varDefinitions
-    // are silently dropped during rendering. Needs fix in declaration rendering before
-    // enabling. The exprAssignsVarDeep helper is ready.
+    // For while/for loops: the condition is evaluated before the body.
+    // If the condition assigns the variable (e.g., while ((x = read()) != -1)),
+    // the variable is definitely assigned per JLS §16. The declaration placement
+    // is handled by the RTF DoStatement fix in the definition placement code.
     if (stat.type == Statement.StatementType.DO) {
+      DoStatement doStat = (DoStatement) stat;
+      if (doStat.getLooptype() == DoStatement.Type.WHILE
+          || doStat.getLooptype() == DoStatement.Type.FOR) {
+        Exprent cond = doStat.getConditionExprent();
+        if (cond != null && exprAssignsVarDeep(cond, varIndex)) {
+          return true;
+        }
+      }
       return false;
     }
 
