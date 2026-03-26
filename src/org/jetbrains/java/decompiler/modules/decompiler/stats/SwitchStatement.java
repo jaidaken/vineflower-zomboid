@@ -423,9 +423,51 @@ public class SwitchStatement extends Statement {
       edges.add(lst);
     }
 
-    // In roundtrip fidelity mode, preserve the original bytecode case order
-    // instead of sorting numerically or rearranging cliques.
-    if (!DecompilerContext.isRoundtripFidelity()) {
+    if (DecompilerContext.isRoundtripFidelity()) {
+      // RTF: sort case bodies by bytecode offset to match the original physical layout.
+      // Statement IDs are unreliable after structuring (merged statements get new IDs),
+      // but bytecode offsets are authoritative.
+      for (int i = 0; i < edges.size() - 1; i++) {
+        for (int j = edges.size() - 1; j > i; j--) {
+          int offsetA = nodes.get(j - 1) != null ? nodes.get(j - 1).getStartEndRange().start : Integer.MAX_VALUE;
+          int offsetB = nodes.get(j) != null ? nodes.get(j).getStartEndRange().start : Integer.MAX_VALUE;
+          // Fall back to edge index for nodes with zero offset (dummy statements)
+          if (offsetA <= 0) offsetA = edges.get(j - 1).get(0);
+          if (offsetB <= 0) offsetB = edges.get(j).get(0);
+          if (offsetA > offsetB) {
+            edges.set(j, edges.set(j - 1, edges.get(j)));
+            nodes.set(j, nodes.set(j - 1, nodes.get(j)));
+          }
+        }
+      }
+
+      // Clique sort: ensure fall-through targets are adjacent to their predecessors
+      for (int index = 0; index < nodes.size(); index++) {
+        Statement stat = nodes.get(index);
+        if (stat != null) {
+          HashSet<Statement> setPreds = new HashSet<>(stat.getNeighbours(StatEdge.TYPE_REGULAR, EdgeDirection.BACKWARD));
+          setPreds.remove(first);
+          if (!setPreds.isEmpty()) {
+            Statement pred = setPreds.iterator().next();
+            for (int j = 0; j < nodes.size(); j++) {
+              if (j != (index - 1) && nodes.get(j) == pred) {
+                nodes.add(j + 1, stat);
+                edges.add(j + 1, edges.get(index));
+                if (j > index) {
+                  nodes.remove(index);
+                  edges.remove(index);
+                  index--;
+                } else {
+                  nodes.remove(index + 1);
+                  edges.remove(index + 1);
+                }
+                break;
+              }
+            }
+          }
+        }
+      }
+    } else {
       // sort edges (bubblesort)
       for (int i = 0; i < edges.size() - 1; i++) {
         for (int j = edges.size() - 1; j > i; j--) {
