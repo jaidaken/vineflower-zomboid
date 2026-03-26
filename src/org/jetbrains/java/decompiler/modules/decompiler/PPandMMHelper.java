@@ -234,8 +234,30 @@ public class PPandMMHelper {
       IfStatement destination = findIfSuccessor(stat);
 
       if (destination != null) {
+        // RTF: handle "copy = field++; if (... copy ...) {}" pattern.
+        // The last exprent is an assignment where the RHS is a post-increment on a field.
+        // The copy variable is used in the if-condition (e.g., as an array index).
+        // Inline the post-increment into the if-condition, eliminating the copy variable.
+        Exprent lastExpr = stat.getExprents().get(stat.getExprents().size() - 1);
+        if (lastExpr instanceof AssignmentExprent assignExpr
+            && assignExpr.getLeft() instanceof VarExprent copyVar
+            && assignExpr.getRight() instanceof FunctionExprent funcExpr
+            && (funcExpr.getFuncType() == FunctionExprent.FunctionType.IPP
+                || funcExpr.getFuncType() == FunctionExprent.FunctionType.IMM)) {
+          Exprent ifExpr = destination.getHeadexprent().getCondition();
+          // Find and replace the copy variable in the if-condition
+          VarExprent found = findSingleVarUse(ifExpr, copyVar);
+          if (found != null) {
+            replaceExprentInTree(ifExpr, found, funcExpr);
+            funcExpr.addBytecodeOffsets(found.bytecode);
+            stat.getExprents().remove(lastExpr);
+            destination.setHasPPMM(true);
+            res = true;
+          }
+        }
+
         // Last exprent
-        Exprent expr = stat.getExprents().get(stat.getExprents().size() - 1);
+        Exprent expr = stat.getExprents().isEmpty() ? null : stat.getExprents().get(stat.getExprents().size() - 1);
         if (expr instanceof FunctionExprent) {
           FunctionExprent func = (FunctionExprent)expr;
 
@@ -323,6 +345,43 @@ public class PPandMMHelper {
     }
 
     return res;
+  }
+
+  /** Find a single use of a variable in an expression tree. Returns null if zero or multiple uses. */
+  private static VarExprent findSingleVarUse(Exprent expr, VarExprent target) {
+    VarExprent found = null;
+    for (Exprent sub : expr.getAllExprents(true)) {
+      if (sub instanceof VarExprent ve
+          && ve.getIndex() == target.getIndex()
+          && ve.getVersion() == target.getVersion()) {
+        if (found != null) return null; // multiple uses
+        found = ve;
+      }
+    }
+    // Check the expression itself
+    if (expr instanceof VarExprent ve
+        && ve.getIndex() == target.getIndex()
+        && ve.getVersion() == target.getVersion()) {
+      if (found != null) return null;
+      found = ve;
+    }
+    return found;
+  }
+
+  /** Replace an exprent in an expression tree. */
+  private static void replaceExprentInTree(Exprent root, Exprent old, Exprent replacement) {
+    Deque<Exprent> stack = new LinkedList<>();
+    stack.push(root);
+    while (!stack.isEmpty()) {
+      Exprent current = stack.pop();
+      for (Exprent sub : current.getAllExprents()) {
+        if (sub == old) {
+          current.replaceExprent(old, replacement);
+          return;
+        }
+        stack.push(sub);
+      }
+    }
   }
 
   private static IfStatement findIfSuccessor(Statement stat) {

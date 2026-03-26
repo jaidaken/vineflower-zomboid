@@ -697,9 +697,13 @@ public class SimplifyExprentsHelper {
       return false;
     }
 
-    // There must be a following expression that uses the copy var
+    // There must be a following expression that uses the copy var.
+    // If there's no third expression in the list, the copy var might be used
+    // in a sibling statement (e.g., if-condition). Allow the folding when
+    // the source is a field - PPandMMHelper.inlinePPIandMMIIf will handle
+    // inlining the post-increment into the if-condition later.
     if (index + 2 >= list.size()) {
-      return false;
+      return af.getRight() instanceof FieldExprent;
     }
 
     Exprent following = list.get(index + 2);
