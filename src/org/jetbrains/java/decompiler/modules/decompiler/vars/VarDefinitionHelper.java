@@ -308,8 +308,8 @@ public class VarDefinitionHelper {
           // initializers produce extra bytecode (ACONST_NULL + ASTORE, DCONST_0 + DSTORE,
           // etc.) that breaks store-load normalization in the bytecode comparator.
           boolean needsInit = isUsedBeforeAssigned(stat, index, first);
-          // Debug: trace var 59 in OpenSimplexNoise eval(DDDD)D
-          if (mt.getName().equals("eval") && mt.getDescriptor().equals("(DDDD)D") && needsInit && index == 59) {
+          // Debug: trace TextureDraw.Create vars that still have init
+          if (mt.getName().equals("Create") && mt.getDescriptor().contains("WallShaderTexRender") && needsInit) {
             try {
               debugWriter = new java.io.FileWriter("/tmp/rtf_varinit_debug.log", true);
               debugWriter.write("=== var " + index + " in " + mt.getName() + mt.getDescriptor() + " ===\n");
@@ -576,15 +576,13 @@ public class VarDefinitionHelper {
     return null;
   }
 
-  /** Check if any expression in a statement tree reads a variable. */
+  /** Check if any expression in a statement tree reads or assigns a variable. */
   private static boolean containsVar(Statement stat, int varIndex) {
     if (stat.getExprents() != null) {
       for (Exprent expr : stat.getExprents()) {
         if (exprReadsVar(expr, varIndex)) return true;
-        if (expr instanceof AssignmentExprent) {
-          Exprent left = ((AssignmentExprent) expr).getLeft();
-          if (left instanceof VarExprent && ((VarExprent) left).getIndex() == varIndex) return true;
-        }
+        // Check assignments including chained ones (a = b = value)
+        if (exprAssignsVar(expr, varIndex)) return true;
       }
     }
     for (Statement child : stat.getStats()) {
