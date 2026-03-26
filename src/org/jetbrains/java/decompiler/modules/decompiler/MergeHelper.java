@@ -15,6 +15,8 @@ import org.jetbrains.java.decompiler.modules.decompiler.sforms.SFormsConstructor
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement.EdgeDirection;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.CheckTypesResult;
+import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 
 import java.util.*;
@@ -632,6 +634,12 @@ public class MergeHelper {
         if (invc.getClassname().contains("java/util/stream")) {
           return false;
         }
+
+        // Note: for-each on concrete classes (ArrayList, etc.) compiles to
+        // invokeinterface Iterable.iterator() instead of the original
+        // invokevirtual ArrayList.iterator(). This is a known RTF limitation
+        // (+2 bytes per loop). Blocking for-each here causes more regressions
+        // than it fixes. The fix needs to be in DoStatement rendering instead.
 
         if (!isHasNextCall(drillNots(stat.getConditionExprent())) ||
             !(firstDoExprent instanceof AssignmentExprent)) {
