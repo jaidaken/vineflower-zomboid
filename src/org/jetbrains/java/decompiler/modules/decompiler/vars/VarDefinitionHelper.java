@@ -201,7 +201,13 @@ public class VarDefinitionHelper {
     // Pre-pass: find variables that are assigned more than once
     multiAssignedVars = findMultiAssignedVars(root);
 
-    for (Entry<Integer, Statement> en : mapVarDefStatements.entrySet()) {
+    List<Entry<Integer, Statement>> varEntries = new ArrayList<>(mapVarDefStatements.entrySet());
+    // RTF: sort by var index so declarations appear in original slot order
+    if (DecompilerContext.isRoundtripFidelity()) {
+      varEntries.sort(Comparator.comparingInt(Entry::getKey));
+    }
+
+    for (Entry<Integer, Statement> en : varEntries) {
       Statement stat = en.getValue();
       int index = en.getKey();
 
