@@ -749,11 +749,17 @@ public class InvocationExprent extends Exprent {
 
     if (isStatic || invocationType == InvocationType.DYNAMIC || invocationType == InvocationType.CONSTANT_DYNAMIC) {
       if (isBoxingCall() && canIgnoreBoxing && !boxing.forceBoxing) {
-        // process general "boxing" calls, e.g. 'Object[] data = { true }' or 'Byte b = 123'
-        // here 'byte' and 'short' values do not need an explicit narrowing type cast
-        ExprProcessor.getCastedExprent(lstParameters.get(0), descriptor.params[0], buf, indent, ExprProcessor.NullCastType.DONT_CAST, false, true, false);
-        buf.addBytecodeMapping(bytecode);
-        return buf;
+        // RTF: preserve boxing calls because stripping them can change semantics.
+        // E.g., Boolean.valueOf(x.booleanValue()) normalizes to canonical Boolean
+        // instances (TRUE/FALSE). Stripping to just 'x' returns the original
+        // (possibly non-canonical) Boolean, breaking reference equality checks.
+        if (!DecompilerContext.isRoundtripFidelity()) {
+          // process general "boxing" calls, e.g. 'Object[] data = { true }' or 'Byte b = 123'
+          // here 'byte' and 'short' values do not need an explicit narrowing type cast
+          ExprProcessor.getCastedExprent(lstParameters.get(0), descriptor.params[0], buf, indent, ExprProcessor.NullCastType.DONT_CAST, false, true, false);
+          buf.addBytecodeMapping(bytecode);
+          return buf;
+        }
       }
 
       if (invocationType == InvocationType.CONSTANT_DYNAMIC) {
