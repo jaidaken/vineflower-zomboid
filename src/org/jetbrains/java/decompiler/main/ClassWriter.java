@@ -211,7 +211,12 @@ public class ClassWriter implements StatementWriter {
               .append(" */ ");
           }
           // Array constructor lambda
-          if (md_lambda.params.length == 1 && md_lambda.params[0].equals(VarType.VARTYPE_INT) && md_lambda.ret.arrayDim > 0) {
+          // Also accept boxed Integer: the functional interface may use Function<Integer, T[]>
+          // while the original lambda implementation takes primitive int, with the JVM metafactory
+          // handling the unboxing bridge.
+          boolean isIntParam = md_lambda.params.length == 1
+              && (md_lambda.params[0].equals(VarType.VARTYPE_INT) || md_lambda.params[0].equals(VarType.VARTYPE_INTEGER));
+          if (isIntParam && md_lambda.ret.arrayDim > 0) {
             if (root.getFirst() instanceof BasicBlockStatement && root.getFirst().getExprents().size() == 1) {
               Exprent exp = root.getFirst().getExprents().get(0);
               if (exp instanceof ExitExprent) {

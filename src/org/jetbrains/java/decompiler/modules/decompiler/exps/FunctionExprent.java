@@ -735,6 +735,18 @@ public class FunctionExprent extends Exprent {
           if (needsBoolCast) {
             condBuf = condBuf.enclose("(boolean)", "");
           }
+
+          // RTF: when both ternary branches are unboxing calls (e.g. .booleanValue()),
+          // force them to be printed explicitly. Without this, auto-unboxing elision
+          // causes javac to emit a single shared unboxing call after the branch merge,
+          // producing one fewer instruction than the original's per-branch calls.
+          Exprent op1 = lstOperands.get(1);
+          Exprent op2 = lstOperands.get(2);
+          if (op1 instanceof InvocationExprent inv1 && inv1.isUnboxingCall()
+              && op2 instanceof InvocationExprent inv2 && inv2.isUnboxingCall()) {
+            inv1.forceUnboxing(true);
+            inv2.forceUnboxing(true);
+          }
         }
         buf.append(condBuf)
           .appendPossibleNewline(" ").append("? ")

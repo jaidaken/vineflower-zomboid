@@ -806,6 +806,17 @@ public class SimplifyExprentsHelper {
         && followVar.getVersion() == copyVar.getVersion()) {
       return true;
     }
+    // Also safe if the copy var is used as the right-hand side of a local variable assignment.
+    // Pattern: copy = this.field; this.field++; localVar = copy;
+    // This reconstructs to: copy = this.field++; localVar = copy;
+    // (and later passes may further inline copy into localVar)
+    if (following instanceof AssignmentExprent followAssign
+        && followAssign.getLeft() instanceof VarExprent
+        && followAssign.getRight() instanceof VarExprent followVar
+        && followVar.getIndex() == copyVar.getIndex()
+        && followVar.getVersion() == copyVar.getVersion()) {
+      return true;
+    }
     // Also safe if the copy var is used as a method argument in the following expression.
     // Pattern: copy = this.field; this.field++; x = this.method(copy);
     // This reconstructs to: x = this.method(this.field++);
@@ -1473,6 +1484,17 @@ public class SimplifyExprentsHelper {
                   }
                 }
 
+                // RTF: skip ternary folding when the merge-point invokes a method on the
+                // stack variable (tail-merge pattern). In the original bytecode each branch
+                // has its own copy of the invocation (e.g. .booleanValue()), but a ternary
+                // shares it, producing one fewer instruction after recompilation.
+                if (found && DecompilerContext.isRoundtripFidelity()) {
+                  Statement mergeTarget = ifStatement.getAllSuccessorEdges().get(0).getDestination();
+                  if (mergeTarget != null && hasTailMergeUnboxing(mergeTarget, ifVar.getIndex())) {
+                    found = false;
+                  }
+                }
+
                 if (found) {
                   List<Exprent> data = new ArrayList<>(statement.getFirst().getExprents());
 
@@ -1553,6 +1575,31 @@ public class SimplifyExprentsHelper {
 
   private static boolean isIff(Exprent exp) {
     return exp instanceof FunctionExprent && ((FunctionExprent) exp).getFuncType() == FunctionType.TERNARY;
+  }
+
+  /**
+   * Checks whether the merge-point statement applies an unboxing call on a given
+   * stack variable. When both branches of an if-else assign a boxed value to the
+   * same stack var and the merge-point then unboxes it (e.g. {@code .booleanValue()}),
+   * folding the assignments into a ternary lets javac emit a single shared unboxing
+   * call instead of one per branch, changing the instruction count by -1.
+   */
+  private static boolean hasTailMergeUnboxing(Statement mergeTarget, int stackVarIndex) {
+    List<Exprent> exprents = mergeTarget.getExprents();
+    if (exprents == null || exprents.isEmpty()) {
+      return false;
+    }
+    for (Exprent expr : exprents) {
+      for (Exprent sub : expr.getAllExprents(true, true)) {
+        if (sub instanceof InvocationExprent inv && inv.isUnboxingCall()) {
+          Exprent instance = inv.getInstance();
+          if (instance instanceof VarExprent && ((VarExprent) instance).getIndex() == stackVarIndex) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   private static boolean collapseInlinedClass14(Statement stat) {

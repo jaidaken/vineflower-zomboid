@@ -2,6 +2,7 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
 import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
@@ -102,6 +103,13 @@ public final class ConcatenationHelper {
         if (parameters.size() >= 2) {
           return createConcatExprent(parameters, expr.bytecode);
         } else if (parameters.size() == 1) {
+          // RTF mode: preserve single-arg concat as "" + arg to match original bytecode.
+          // javac sometimes wraps a single String expression in makeConcatWithConstants,
+          // and stripping it changes the instruction count.
+          if (DecompilerContext.isRoundtripFidelity()) {
+            parameters.add(0, new ConstExprent(VarType.VARTYPE_STRING, "", expr.bytecode));
+            return createConcatExprent(parameters, expr.bytecode);
+          }
           // Single-arg makeConcatWithConstants: just return the arg itself
           return parameters.get(0);
         }
