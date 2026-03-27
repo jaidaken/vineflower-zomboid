@@ -253,8 +253,15 @@ public class IfStatement extends Statement {
     }
 
     boolean elseif = false;
+    // RTF: Inside try-finally or synchronized blocks, convert if-else to if + early exit
+    String rtfEarlyExit = getRtfEarlyExitKeyword();
 
-    if (elsestat != null) {
+    if (elsestat != null && rtfEarlyExit != null) {
+      buf.appendIndent(indent + 1).append(rtfEarlyExit).append(";").appendLineSeparator();
+      buf.appendIndent(indent).append("}").appendLineSeparator();
+      buf.append(ExprProcessor.jmpWrapper(elsestat, indent, false));
+      elseif = true;
+    } else if (elsestat != null) {
       if (elsestat instanceof IfStatement
           && elsestat.varDefinitions.isEmpty() && (elsestat.getFirst().getExprents() != null && elsestat.getFirst().getExprents().isEmpty()) &&
           !elsestat.isLabeled() &&
@@ -463,6 +470,32 @@ public class IfStatement extends Statement {
 
   public void toggleRtfIfBodyIsFallThrough() {
     this.rtfIfBodyIsFallThrough = !this.rtfIfBodyIsFallThrough;
+  }
+
+  private String getRtfEarlyExitKeyword() {
+    if (!DecompilerContext.isRoundtripFidelity() || elsestat == null || iftype != IFTYPE_IFELSE) {
+      return null;
+    }
+    Statement catchAllOrSync = null;
+    Statement child = this;
+    for (Statement par = child.getParent(); par != null; par = par.getParent()) {
+      if (par.type == StatementType.CATCH_ALL && par.getFirst() == child) {
+        catchAllOrSync = par;
+        break;
+      }
+      if (par.type == StatementType.SYNCHRONIZED && ((SynchronizedStatement) par).getBody() == child) {
+        catchAllOrSync = par;
+        break;
+      }
+      child = par;
+    }
+    if (catchAllOrSync == null) return null;
+    for (Statement cur = catchAllOrSync.getParent(); cur != null; cur = cur.getParent()) {
+      if (cur.type == StatementType.DO) return "continue";
+      if (cur.type == StatementType.ROOT) break;
+    }
+    if (catchAllOrSync.type == StatementType.SYNCHRONIZED) return "return";
+    return null;
   }
 
   @Override
