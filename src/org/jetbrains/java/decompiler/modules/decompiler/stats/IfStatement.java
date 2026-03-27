@@ -5,6 +5,7 @@ import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.DecHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
+import org.jetbrains.java.decompiler.modules.decompiler.SecondaryFunctionsHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.ValidationHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
@@ -232,7 +233,36 @@ public class IfStatement extends Statement {
     if (DecompilerContext.isRoundtripFidelity() && rtfOriginalHadGotoFallthrough
         && iftype == IFTYPE_IF && ifstat != null && elsestat == null && condition instanceof IfExprent) {
       IfExprent ifExpr = (IfExprent) condition;
-      // Negate the condition for the empty-if form
+      Exprent innerCond = ifExpr.getCondition();
+      // For compound conditions (&&), split the first operand and render as
+      // if(!(first)){} else if(rest){body} so javac emits the 2-instruction
+      // pattern only for the first sub-condition without affecting the rest.
+      if (innerCond instanceof FunctionExprent
+          && ((FunctionExprent) innerCond).getFuncType() == FunctionExprent.FunctionType.BOOLEAN_AND) {
+        List<Exprent> operands = ((FunctionExprent) innerCond).getLstOperands();
+        if (operands.size() >= 2) {
+          // Negate the first operand for the empty-if
+          Exprent firstOp = operands.get(0);
+          FunctionExprent negFirst = new FunctionExprent(FunctionExprent.FunctionType.BOOL_NOT, firstOp, null);
+          Exprent simplified = SecondaryFunctionsHelper.propagateBoolNot(negFirst);
+          Exprent negatedFirst = simplified != null ? simplified : negFirst;
+          // Build the remaining condition (second operand onward)
+          Exprent restCond;
+          if (operands.size() == 2) {
+            restCond = operands.get(1);
+          } else {
+            restCond = new FunctionExprent(FunctionExprent.FunctionType.BOOLEAN_AND,
+                new ArrayList<>(operands.subList(1, operands.size())), null);
+          }
+          buf.appendIndent(indent);
+          buf.append("if (").append(negatedFirst.toJava(indent)).append(") {").appendLineSeparator();
+          buf.appendIndent(indent).append("} else if (").append(restCond.toJava(indent)).append(") {").appendLineSeparator();
+          buf.append(ExprProcessor.jmpWrapper(ifstat, indent + 1, true));
+          buf.appendIndent(indent).append("}").appendLineSeparator();
+          return buf;
+        }
+      }
+      // Simple condition: negate the whole condition for the empty-if form
       IfExprent negated = (IfExprent) ifExpr.copy();
       negated.negateIf();
       buf.appendIndent(indent);
@@ -469,6 +499,10 @@ public class IfStatement extends Statement {
 
   public void setHasPPMM(boolean hasPPMM) {
     this.hasPPMM = hasPPMM;
+  }
+
+  public boolean isRtfOriginalHadGotoFallthrough() {
+    return rtfOriginalHadGotoFallthrough;
   }
 
   public boolean isRtfConditionFlipped() {
