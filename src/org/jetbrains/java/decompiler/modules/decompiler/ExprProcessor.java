@@ -18,6 +18,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.flow.DirectNode;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.FlattenStatementsHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarProcessor;
+import org.jetbrains.java.decompiler.main.rels.MethodWrapper;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.attr.StructBootstrapMethodsAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
@@ -900,6 +901,170 @@ public class ExprProcessor implements CodeConstants {
     return result;
   }
 
+  /**
+   * RTF: inline a local variable assignment into the field instance position when the
+   * variable was created by a dup that stored a method return value and used it as a
+   * field receiver.
+   *
+   * Pattern matched:
+   *   A:  var = invocation()          (assignment with invocation RHS)
+   *   ... (intervening statements that do NOT reference var)
+   *   B:  var.field = RHS             (field assignment where instance is the same var)
+   *
+   * Transformed to:
+   *   ... (intervening statements preserved)
+   *   B': invocation().field = RHS    (A removed, invocation inlined as field instance)
+   *
+   * Guards:
+   *   - A's RHS must be an InvocationExprent
+   *   - B is the FIRST reference to the var after A
+   *   - B's LHS must be a FieldExprent whose getInstance() is the same var
+   *   - The var must NOT appear in B's RHS
+   *   - After B, the next reference to the var (if any) must be a reassignment
+   *   - All references to this var index in the entire method must be in this list
+   *     (prevents unsafe inlining when the var is used in other basic blocks)
+   *   - If A is a definition, the definition flag is moved to the next reassignment
+   */
+  private static List<? extends Exprent> inlineDupFieldReceiver(List<? extends Exprent> lst) {
+    List<Exprent> result = new ArrayList<>(lst);
+
+    // Method-wide ref counts are needed for cross-block safety. Cache per var index.
+    MethodWrapper method = (MethodWrapper) DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+    if (method == null || method.root == null) return result;
+
+    for (int i = 0; i < result.size() - 1; i++) {
+      Exprent first = result.get(i);
+
+      // Statement A must be: var = invocation()
+      if (!(first instanceof AssignmentExprent asA)) continue;
+      if (!(asA.getLeft() instanceof VarExprent varA)) continue;
+      if (!(asA.getRight() instanceof InvocationExprent invocation)) continue;
+
+      int varIndex = varA.getIndex();
+
+      // Find statement B: the FIRST statement after A that references this var.
+      // All intervening statements must NOT reference the var.
+      int bIdx = -1;
+      for (int j = i + 1; j < result.size(); j++) {
+        if (containsVarByIndex(result.get(j), varIndex)) {
+          bIdx = j;
+          break;
+        }
+      }
+      if (bIdx < 0) continue; // var not used after A at all
+
+      Exprent bExpr = result.get(bIdx);
+
+      // Statement B must be: field = RHS, where field's instance is the same var
+      if (!(bExpr instanceof AssignmentExprent asB)) continue;
+      if (!(asB.getLeft() instanceof FieldExprent fieldB)) continue;
+      Exprent fieldInstance = fieldB.getInstance();
+      if (!(fieldInstance instanceof VarExprent varInst)) continue;
+      if (varInst.getIndex() != varIndex) continue;
+
+      // The var must NOT appear in B's RHS
+      if (containsVarByIndex(asB.getRight(), varIndex)) continue;
+
+      // Check statements after B. The next reference to this var must be either
+      // nothing or an assignment TO the var (reassignment, meaning the old value is dead).
+      boolean safeAfterB = true;
+      for (int j = bIdx + 1; j < result.size(); j++) {
+        Exprent later = result.get(j);
+        if (!containsVarByIndex(later, varIndex)) continue;
+        if (later instanceof AssignmentExprent asLater
+            && asLater.getLeft() instanceof VarExprent vLater
+            && vLater.getIndex() == varIndex
+            && !containsVarByIndex(asLater.getRight(), varIndex)) {
+          break; // safe: next ref is a reassignment with no var in RHS
+        }
+        safeAfterB = false;
+        break;
+      }
+      if (!safeAfterB) continue;
+
+      // Method-wide safety: all references to this var must be within this list.
+      // If the var is used in other basic blocks, inlining would break them.
+      int methodRefs = countVarRefsByIndexInStatement(method.root, varIndex);
+      int listRefs = 0;
+      for (Exprent expr : result) {
+        listRefs += countVarRefsByIndexInExprent(expr, varIndex);
+      }
+      if (methodRefs != listRefs) continue;
+
+      // If A is a definition and there are later assignments to this var,
+      // move the definition flag to the next assignment so the type
+      // declaration isn't lost.
+      if (varA.isDefinition()) {
+        for (int j = bIdx + 1; j < result.size(); j++) {
+          Exprent later = result.get(j);
+          if (later instanceof AssignmentExprent asLater
+              && asLater.getLeft() instanceof VarExprent vLater
+              && vLater.getIndex() == varIndex) {
+            vLater.setDefinition(true);
+            break;
+          }
+        }
+      }
+
+      // All guards passed: inline the invocation as the field's instance
+      fieldB.replaceExprent(fieldInstance, invocation);
+      result.remove(i);
+      i--; // re-check this index since the list shifted
+    }
+    return result;
+  }
+
+  /**
+   * Count all references to a variable (by index, ignoring SSA version) across the
+   * entire statement tree. Traverses the full method body.
+   */
+  private static int countVarRefsByIndexInStatement(Statement stat, int varIndex) {
+    int count = 0;
+    List<Exprent> exprents = stat.getExprents();
+    if (exprents != null) {
+      for (Exprent expr : exprents) {
+        count += countVarRefsByIndexInExprent(expr, varIndex);
+      }
+    }
+    for (Statement child : stat.getStats()) {
+      count += countVarRefsByIndexInStatement(child, varIndex);
+    }
+    return count;
+  }
+
+  /**
+   * Count all references to a variable (by index, ignoring SSA version) within an
+   * expression tree.
+   */
+  private static int countVarRefsByIndexInExprent(Exprent expr, int varIndex) {
+    int count = 0;
+    if (expr instanceof VarExprent ve && ve.getIndex() == varIndex) {
+      count++;
+    }
+    for (Exprent child : expr.getAllExprents(true)) {
+      if (child instanceof VarExprent ve && ve.getIndex() == varIndex) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Check if an expression tree contains any VarExprent with the given variable index,
+   * regardless of SSA version.
+   */
+  private static boolean containsVarByIndex(Exprent expr, int varIndex) {
+    if (expr instanceof VarExprent ve && ve.getIndex() == varIndex) {
+      return true;
+    }
+    for (Exprent child : expr.getAllExprents(true)) {
+      if (child instanceof VarExprent ve && ve.getIndex() == varIndex) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public static boolean endsWithSemicolon(Exprent expr) {
     return !(expr instanceof SwitchHeadExprent ||
              expr instanceof MonitorExprent ||
@@ -976,6 +1141,7 @@ public class ExprProcessor implements CodeConstants {
     // RTF: chain consecutive assignments that share a bytecode offset (from dup).
     if (DecompilerContext.isRoundtripFidelity() && lst.size() >= 2) {
       lst = chainDupAssignments(lst);
+      lst = inlineDupFieldReceiver(lst);
     }
 
     for (Exprent expr : lst) {
