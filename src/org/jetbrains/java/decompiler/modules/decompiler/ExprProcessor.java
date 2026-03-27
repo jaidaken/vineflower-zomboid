@@ -26,6 +26,7 @@ import org.jetbrains.java.decompiler.struct.consts.ConstantPool;
 import org.jetbrains.java.decompiler.struct.consts.LinkConstant;
 import org.jetbrains.java.decompiler.struct.consts.PooledConstant;
 import org.jetbrains.java.decompiler.struct.consts.PrimitiveConstant;
+import org.jetbrains.java.decompiler.struct.gen.FieldDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
@@ -210,6 +211,10 @@ public class ExprProcessor implements CodeConstants {
     // RTF: temporary storage for popped expression preceding an INVOKESTATIC,
     // used to preserve instance-qualified static method calls.
     Exprent rtfStaticInstanceQualifier = null;
+    // RTF: string-based qualifier for cases where args are loaded between POP and INVOKESTATIC.
+    // The string is pre-rendered at POP time to avoid corruption by later decompiler passes.
+    String rtfStaticInstanceQualifierStr = null;
+    int rtfStaticQualifierTargetIdx = -1;
 
     for (int i = 0; i < seq.length(); i++) {
 
@@ -499,6 +504,12 @@ public class ExprProcessor implements CodeConstants {
               exprinv.setStaticInstanceQualifier(rtfStaticInstanceQualifier);
               rtfStaticInstanceQualifier = null;
             }
+            // RTF: attach string-based qualifier for gap case (args between POP and INVOKESTATIC)
+            if (rtfStaticInstanceQualifierStr != null && i == rtfStaticQualifierTargetIdx && instr.opcode == opc_invokestatic) {
+              exprinv.setStaticInstanceQualifierString(rtfStaticInstanceQualifierStr);
+              rtfStaticInstanceQualifierStr = null;
+              rtfStaticQualifierTargetIdx = -1;
+            }
             if (exprinv.getDescriptor().ret.type == CodeType.VOID) {
               exprlist.add(exprinv);
             }
@@ -583,37 +594,75 @@ public class ExprProcessor implements CodeConstants {
           // returns VarExprent. We must look at the DEFINITION (the assignment RHS
           // in exprlist) to determine if the source was a field/variable load vs
           // a method return value. Only field/variable loads are valid qualifiers.
-          if (DecompilerContext.isRoundtripFidelity() && i + 1 < seq.length()
-              && seq.getInstr(i + 1).opcode == opc_invokestatic && !exprlist.isEmpty()) {
-            Exprent popped = stack.pop();
+          //
+          // Two cases:
+          // 1. Immediate: POP is directly followed by INVOKESTATIC (i+1) - use Exprent approach
+          // 2. Gap: args are loaded between POP and INVOKESTATIC - use String approach
+          //    (string avoids corruption by later variable renaming/merging passes)
+          if (DecompilerContext.isRoundtripFidelity() && !exprlist.isEmpty()) {
             Exprent lastExpr = exprlist.get(exprlist.size() - 1);
+            Exprent rhs = null;
             if (lastExpr instanceof AssignmentExprent) {
-              Exprent rhs = ((AssignmentExprent) lastExpr).getRight();
-              if (rhs instanceof FieldExprent ||
-                  (rhs instanceof VarExprent && !((VarExprent) rhs).isStack())) {
-                // Validate that the qualifier type matches the static method's declaring class.
-                // If "this" (var index 0) is the qualifier, the current class must match.
-                // If a field is the qualifier, the field's declaring class type must match.
-                String staticMethodClass = pool.getLinkConstant(seq.getInstr(i + 1).operand(0)).classname;
-                boolean qualifierMatches = false;
-                if (rhs instanceof VarExprent && ((VarExprent) rhs).getIndex() == 0) {
-                  // "this" qualifier - check if the static method is on the current class
-                  StructClass currentClass = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS);
-                  if (currentClass != null && currentClass.qualifiedName.equals(staticMethodClass)) {
-                    qualifierMatches = true;
-                  }
-                } else if (rhs instanceof FieldExprent) {
-                  // Field qualifier - check if the field's type matches the static method's class
-                  FieldExprent fieldRhs = (FieldExprent) rhs;
-                  String fieldTypeName = fieldRhs.getDescriptor().type.value;
-                  if (staticMethodClass.equals(fieldTypeName)) {
-                    qualifierMatches = true;
-                  }
-                }
-                if (qualifierMatches) {
-                  rtfStaticInstanceQualifier = popped;
+              Exprent rhsCandidate = ((AssignmentExprent) lastExpr).getRight();
+              if (rhsCandidate instanceof FieldExprent ||
+                  (rhsCandidate instanceof VarExprent && !((VarExprent) rhsCandidate).isStack())) {
+                rhs = rhsCandidate;
+              }
+            }
+            if (rhs != null && i + 1 < seq.length() && seq.getInstr(i + 1).opcode == opc_invokestatic) {
+              // Case 1: immediate - POP followed directly by INVOKESTATIC
+              Exprent popped = stack.pop();
+              String staticMethodClass = pool.getLinkConstant(seq.getInstr(i + 1).operand(0)).classname;
+              if (validateQualifierForStaticCall(rhs, staticMethodClass)) {
+                rtfStaticInstanceQualifier = popped;
+              }
+            } else if (rhs != null && i + 1 < seq.length()) {
+              // Case 2: gap - args loaded between POP and INVOKESTATIC.
+              // Validate backward: the instruction before POP must be GETFIELD (for field qualifier)
+              // or a load instruction (for "this" qualifier). This prevents false positives where
+              // a POP discards an unrelated expression.
+              boolean validBackwardPattern = false;
+              if (i >= 1) {
+                int prevOpc = seq.getInstr(i - 1).opcode;
+                if (rhs instanceof FieldExprent && prevOpc == opc_getfield) {
+                  validBackwardPattern = true;
+                } else if (rhs instanceof VarExprent && (prevOpc == opc_aload
+                    || (prevOpc >= opc_aload_0 && prevOpc <= opc_aload_3))) {
+                  validBackwardPattern = true;
                 }
               }
+              if (validBackwardPattern) {
+                String qualifierClassName = null;
+                if (rhs instanceof FieldExprent) {
+                  qualifierClassName = ((FieldExprent) rhs).getDescriptor().type.value;
+                } else if (rhs instanceof VarExprent && ((VarExprent) rhs).getIndex() == 0) {
+                  StructClass currentClass = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS);
+                  if (currentClass != null) {
+                    qualifierClassName = currentClass.qualifiedName;
+                  }
+                }
+                if (qualifierClassName != null) {
+                  int targetIdx = findStaticCallAfterPop(seq, i, pool, qualifierClassName);
+                  if (targetIdx >= 0) {
+                    String qualStr = renderQualifierToString(rhs, exprlist);
+                    if (qualStr != null) {
+                      stack.pop();
+                      rtfStaticInstanceQualifierStr = qualStr;
+                      rtfStaticQualifierTargetIdx = targetIdx;
+                    } else {
+                      stack.pop();
+                    }
+                  } else {
+                    stack.pop();
+                  }
+                } else {
+                  stack.pop();
+                }
+              } else {
+                stack.pop();
+              }
+            } else {
+              stack.pop();
             }
           } else {
             stack.pop();
@@ -654,6 +703,320 @@ public class ExprProcessor implements CodeConstants {
           break;
       }
     }
+  }
+
+  /**
+   * RTF: Scan forward from a POP instruction to find the matching INVOKESTATIC that
+   * consumes the arguments loaded between POP and the call. Returns the instruction
+   * index of the target INVOKESTATIC, or -1 if no match found.
+   *
+   * After POP, the stack depth relative to the POP point is 0. Each subsequent instruction
+   * changes the depth. When we find an INVOKESTATIC whose parameter slot count equals the
+   * current depth, that is the target (the arguments loaded since POP are exactly its params).
+   *
+   * We also validate the INVOKESTATIC's declaring class matches the qualifier type.
+   */
+  private int findStaticCallAfterPop(InstructionSequence seq, int popIndex, ConstantPool pool,
+                                     String qualifierClassName) {
+    int depth = 0;
+    for (int j = popIndex + 1; j < seq.length(); j++) {
+      Instruction instr = seq.getInstr(j);
+      int opc = instr.opcode;
+
+      // Control flow instructions abort the scan
+      if ((opc >= opc_ifeq && opc <= opc_if_acmpne) || opc == opc_ifnull || opc == opc_ifnonnull
+          || opc == opc_goto || opc == opc_goto_w || opc == opc_jsr || opc == opc_jsr_w
+          || opc == opc_ret || opc == opc_tableswitch || opc == opc_lookupswitch
+          || (opc >= opc_ireturn && opc <= opc_return) || opc == opc_athrow) {
+        return -1;
+      }
+
+      if (opc == opc_invokestatic) {
+        LinkConstant lc = pool.getLinkConstant(instr.operand(0));
+        MethodDescriptor md = MethodDescriptor.parseDescriptor(lc.descriptor);
+        int paramSlots = 0;
+        for (VarType p : md.params) {
+          paramSlots += p.stackSize;
+        }
+        if (depth == paramSlots && lc.classname.equals(qualifierClassName)) {
+          return j;
+        }
+        // INVOKESTATIC that doesn't match: adjust depth for its effect
+        int retSlots = (md.ret.type == CodeType.VOID) ? 0 : md.ret.stackSize;
+        depth = depth - paramSlots + retSlots;
+      } else {
+        // Compute stack delta for this instruction
+        int delta = computeStackDelta(instr, pool);
+        if (delta == Integer.MIN_VALUE) {
+          return -1; // unknown instruction, abort
+        }
+        depth += delta;
+      }
+
+      if (depth < 0) {
+        return -1; // underflow, something is wrong
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * RTF: Compute the net stack delta for a single bytecode instruction.
+   * Returns Integer.MIN_VALUE for instructions that cannot be handled.
+   */
+  private static int computeStackDelta(Instruction instr, ConstantPool pool) {
+    int opc = instr.opcode;
+
+    // Loads push 1 slot (or 2 for long/double)
+    if (opc == opc_aload || (opc >= opc_aload_0 && opc <= opc_aload_3)) return 1;
+    if (opc == opc_iload || (opc >= opc_iload_0 && opc <= opc_iload_3)) return 1;
+    if (opc == opc_fload || (opc >= opc_fload_0 && opc <= opc_fload_3)) return 1;
+    if (opc == opc_lload || (opc >= opc_lload_0 && opc <= opc_lload_3)) return 2;
+    if (opc == opc_dload || (opc >= opc_dload_0 && opc <= opc_dload_3)) return 2;
+
+    // Stores pop 1 slot (or 2)
+    if (opc == opc_astore || (opc >= opc_astore_0 && opc <= opc_astore_3)) return -1;
+    if (opc == opc_istore || (opc >= opc_istore_0 && opc <= opc_istore_3)) return -1;
+    if (opc == opc_fstore || (opc >= opc_fstore_0 && opc <= opc_fstore_3)) return -1;
+    if (opc == opc_lstore || (opc >= opc_lstore_0 && opc <= opc_lstore_3)) return -2;
+    if (opc == opc_dstore || (opc >= opc_dstore_0 && opc <= opc_dstore_3)) return -2;
+
+    // Constants
+    if (opc == opc_aconst_null) return 1;
+    if (opc >= opc_iconst_m1 && opc <= opc_iconst_5) return 1;
+    if (opc == opc_lconst_0 || opc == opc_lconst_1) return 2;
+    if (opc >= opc_fconst_0 && opc <= opc_fconst_2) return 1;
+    if (opc == opc_dconst_0 || opc == opc_dconst_1) return 2;
+    if (opc == opc_bipush || opc == opc_sipush) return 1;
+
+    // LDC: depends on the constant type
+    if (opc == opc_ldc || opc == opc_ldc_w) return 1;
+    if (opc == opc_ldc2_w) return 2;
+
+    // Field access
+    if (opc == opc_getfield) {
+      // pops objectref, pushes field value
+      FieldDescriptor fd = FieldDescriptor.parseDescriptor(pool.getLinkConstant(instr.operand(0)).descriptor);
+      return -1 + fd.type.stackSize;
+    }
+    if (opc == opc_getstatic) {
+      FieldDescriptor fd = FieldDescriptor.parseDescriptor(pool.getLinkConstant(instr.operand(0)).descriptor);
+      return fd.type.stackSize;
+    }
+    if (opc == opc_putfield) {
+      FieldDescriptor fd = FieldDescriptor.parseDescriptor(pool.getLinkConstant(instr.operand(0)).descriptor);
+      return -1 - fd.type.stackSize;
+    }
+    if (opc == opc_putstatic) {
+      FieldDescriptor fd = FieldDescriptor.parseDescriptor(pool.getLinkConstant(instr.operand(0)).descriptor);
+      return -fd.type.stackSize;
+    }
+
+    // Invoke (non-static handled here; invokestatic handled in the caller)
+    if (opc == opc_invokevirtual || opc == opc_invokespecial || opc == opc_invokeinterface) {
+      LinkConstant lc = pool.getLinkConstant(instr.operand(0));
+      MethodDescriptor md = MethodDescriptor.parseDescriptor(lc.descriptor);
+      int paramSlots = 0;
+      for (VarType p : md.params) {
+        paramSlots += p.stackSize;
+      }
+      int retSlots = (md.ret.type == CodeType.VOID) ? 0 : md.ret.stackSize;
+      return -(paramSlots + 1) + retSlots; // +1 for objectref
+    }
+
+    // DUP variants
+    if (opc == opc_dup) return 1;
+    if (opc == opc_dup_x1) return 1;
+    if (opc == opc_dup_x2) return 1;
+    if (opc == opc_dup2) return 2;
+    if (opc == opc_dup2_x1) return 2;
+    if (opc == opc_dup2_x2) return 2;
+    if (opc == opc_swap) return 0;
+    if (opc == opc_pop) return -1;
+    if (opc == opc_pop2) return -2;
+
+    // Arithmetic and type conversions: same-size in, same-size out
+    // Binary int ops: pop 2, push 1 => -1
+    if ((opc >= opc_iadd && opc <= opc_irem) && (opc - opc_iadd) % 4 == 0) return -1; // iadd, isub, imul, idiv, irem
+    if ((opc >= opc_iadd && opc <= opc_drem) && ((opc - opc_iadd) % 4 == 1)) return -2; // ladd, lsub, lmul, ldiv, lrem
+    if ((opc >= opc_iadd && opc <= opc_drem) && ((opc - opc_iadd) % 4 == 2)) return -1; // fadd, fsub, fmul, fdiv, frem
+    if ((opc >= opc_iadd && opc <= opc_drem) && ((opc - opc_iadd) % 4 == 3)) return -2; // dadd, dsub, dmul, ddiv, drem
+
+    // Unary negate: no change in stack size
+    if (opc == opc_ineg || opc == opc_fneg) return 0;
+    if (opc == opc_lneg || opc == opc_dneg) return 0;
+
+    // Shift ops
+    if (opc == opc_ishl || opc == opc_ishr || opc == opc_iushr) return -1;
+    if (opc == opc_lshl || opc == opc_lshr || opc == opc_lushr) return -1; // long shift: pop long+int, push long
+    // Bitwise ops
+    if (opc == opc_iand || opc == opc_ior || opc == opc_ixor) return -1;
+    if (opc == opc_land || opc == opc_lor || opc == opc_lxor) return -2;
+
+    // iinc: no stack effect
+    if (opc == opc_iinc) return 0;
+
+    // Type conversions
+    if (opc == opc_i2l) return 1;   // int->long: +1 slot
+    if (opc == opc_i2f) return 0;   // int->float: same
+    if (opc == opc_i2d) return 1;   // int->double: +1 slot
+    if (opc == opc_l2i) return -1;  // long->int: -1 slot
+    if (opc == opc_l2f) return -1;  // long->float: -1 slot
+    if (opc == opc_l2d) return 0;   // long->double: same (2 slots)
+    if (opc == opc_f2i) return 0;   // float->int: same
+    if (opc == opc_f2l) return 1;   // float->long: +1 slot
+    if (opc == opc_f2d) return 1;   // float->double: +1 slot
+    if (opc == opc_d2i) return -1;  // double->int: -1 slot
+    if (opc == opc_d2l) return 0;   // double->long: same (2 slots)
+    if (opc == opc_d2f) return -1;  // double->float: -1 slot
+    if (opc == opc_i2b || opc == opc_i2c || opc == opc_i2s) return 0;
+
+    // Comparison ops
+    if (opc == opc_lcmp) return -3;  // pop 2 longs (4 slots), push int (1 slot)
+    if (opc == opc_fcmpl || opc == opc_fcmpg) return -1;  // pop 2 floats, push int
+    if (opc == opc_dcmpl || opc == opc_dcmpg) return -3;  // pop 2 doubles (4 slots), push int
+
+    // Object operations
+    if (opc == opc_new) return 1;
+    if (opc == opc_newarray || opc == opc_anewarray) return 0; // pop count, push array
+    if (opc == opc_arraylength) return 0; // pop arrayref, push int
+    if (opc == opc_checkcast) return 0;
+    if (opc == opc_instanceof) return 0; // pop objectref, push int
+    if (opc == opc_monitorenter || opc == opc_monitorexit) return -1;
+    if (opc == opc_multianewarray) return -(instr.operand(1)) + 1; // pop N dimensions, push array
+
+    // Array load: pop 2 (arrayref + index), push value
+    if (opc == opc_iaload || opc == opc_faload || opc == opc_aaload
+        || opc == opc_baload || opc == opc_caload || opc == opc_saload) return -1;
+    if (opc == opc_laload || opc == opc_daload) return 0; // pop 2 slots, push 2 slots
+
+    // Array store: pop 2/3 + value
+    if (opc == opc_iastore || opc == opc_fastore || opc == opc_aastore
+        || opc == opc_bastore || opc == opc_castore || opc == opc_sastore) return -3;
+    if (opc == opc_lastore || opc == opc_dastore) return -4;
+
+    // NOP
+    if (opc == opc_nop) return 0;
+
+    // invokedynamic
+    if (opc == opc_invokedynamic) {
+      LinkConstant lc = pool.getLinkConstant(instr.operand(0));
+      MethodDescriptor md = MethodDescriptor.parseDescriptor(lc.descriptor);
+      int paramSlots = 0;
+      for (VarType p : md.params) {
+        paramSlots += p.stackSize;
+      }
+      int retSlots = (md.ret.type == CodeType.VOID) ? 0 : md.ret.stackSize;
+      return -paramSlots + retSlots;
+    }
+
+    return Integer.MIN_VALUE; // unknown
+  }
+
+  /**
+   * RTF: Validate that the qualifier expression (the RHS of the assignment before POP)
+   * matches the declaring class of the static method. Returns true if the qualifier is valid.
+   */
+  private static boolean validateQualifierForStaticCall(Exprent rhs, String staticMethodClass) {
+    if (rhs instanceof VarExprent && ((VarExprent) rhs).getIndex() == 0) {
+      // "this" qualifier
+      StructClass currentClass = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS);
+      return currentClass != null && currentClass.qualifiedName.equals(staticMethodClass);
+    } else if (rhs instanceof FieldExprent) {
+      String fieldTypeName = ((FieldExprent) rhs).getDescriptor().type.value;
+      return staticMethodClass.equals(fieldTypeName);
+    }
+    return false;
+  }
+
+  /**
+   * RTF: Render the qualifier expression to a Java string for use as a static instance qualifier.
+   * Only handles patterns that resolve to "this" or "this.fieldName".
+   * Returns null if the pattern cannot be resolved to a known qualifier.
+   *
+   * Note: stack variable indices are reused (STACK_BASE + stack.size()), so a GETFIELD that
+   * pops-then-pushes can reuse the same index as the preceding ALOAD. This means exprlist
+   * can contain: stack_N = VarExprent(0); stack_N = FieldExprent(clim, stack_N).
+   * When resolving the FieldExprent's instance (stack_N), we must skip past the
+   * FieldExprent's own assignment to find the earlier ALOAD assignment.
+   */
+  private static String renderQualifierToString(Exprent rhs, List<Exprent> exprlist) {
+    if (rhs instanceof VarExprent && ((VarExprent) rhs).getIndex() == 0) {
+      return "this";
+    } else if (rhs instanceof FieldExprent) {
+      FieldExprent field = (FieldExprent) rhs;
+      Exprent instance = field.getInstance();
+      String fieldName = field.getName();
+
+      // Find the position of the last assignment (the FieldExprent's own) in exprlist.
+      // We need to search BEFORE this position for the instance definition.
+      int startSearch = exprlist.size() - 1;
+      if (instance instanceof VarExprent && ((VarExprent) instance).isStack()) {
+        int targetIdx = ((VarExprent) instance).getIndex();
+        // The last assignment to targetIdx is the FieldExprent's own.
+        // Find it and start searching before it.
+        for (int k = exprlist.size() - 1; k >= 0; k--) {
+          Exprent e = exprlist.get(k);
+          if (e instanceof AssignmentExprent) {
+            Exprent lhs = ((AssignmentExprent) e).getLeft();
+            if (lhs instanceof VarExprent && ((VarExprent) lhs).getIndex() == targetIdx) {
+              startSearch = k - 1;
+              break;
+            }
+          }
+        }
+      }
+      // Resolve the instance from startSearch backward
+      String instanceStr = resolveInstanceToThis(instance, exprlist, startSearch);
+      if (instanceStr != null) {
+        return instanceStr + "." + fieldName;
+      }
+    }
+    return null; // cannot resolve - do not store qualifier
+  }
+
+  /**
+   * RTF: Trace a stack variable back through exprlist to check if it originates from "this".
+   * Returns "this" if it does, null otherwise. Only follows simple assignment chains
+   * (max 10 hops) to avoid runaway recursion.
+   * @param searchFrom the index in exprlist to start searching from (inclusive)
+   */
+  private static String resolveInstanceToThis(Exprent expr, List<Exprent> exprlist, int searchFrom) {
+    int hops = 0;
+    while (hops < 10) {
+      if (expr instanceof VarExprent) {
+        VarExprent var = (VarExprent) expr;
+        if (var.getIndex() == 0 && !var.isStack()) {
+          return "this";
+        }
+        if (!var.isStack()) {
+          return null; // non-stack, non-this variable
+        }
+        // Find the definition of this stack variable in exprlist, starting from searchFrom
+        Exprent resolved = null;
+        int foundAt = -1;
+        for (int k = Math.min(searchFrom, exprlist.size() - 1); k >= 0; k--) {
+          Exprent e = exprlist.get(k);
+          if (e instanceof AssignmentExprent) {
+            Exprent lhs = ((AssignmentExprent) e).getLeft();
+            if (lhs instanceof VarExprent && ((VarExprent) lhs).getIndex() == var.getIndex()) {
+              resolved = ((AssignmentExprent) e).getRight();
+              foundAt = k;
+              break;
+            }
+          }
+        }
+        if (resolved == null) {
+          return null; // definition not found
+        }
+        expr = resolved;
+        searchFrom = foundAt - 1; // for next hop, search before this definition
+        hops++;
+      } else {
+        return null; // not a simple var chain
+      }
+    }
+    return null; // too many hops
   }
 
   private void pushEx(ListStack<Exprent> stack, List<Exprent> exprlist, Exprent exprent) {

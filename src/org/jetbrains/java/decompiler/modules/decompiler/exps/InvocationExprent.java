@@ -77,6 +77,9 @@ public class InvocationExprent extends Exprent {
   // In RTF mode, stores the instance qualifier for static methods called via instance reference
   // (e.g., this.clim.lerp() where lerp is static, compiled as GETFIELD+POP+INVOKESTATIC)
   private Exprent staticInstanceQualifier = null;
+  // String-based qualifier for cases where args are loaded between POP and INVOKESTATIC.
+  // Stored as pre-rendered Java text to avoid corruption by later decompiler passes.
+  private String staticInstanceQualifierString = null;
 
   public InvocationExprent() {
     super(Exprent.Type.INVOCATION);
@@ -194,6 +197,7 @@ public class InvocationExprent extends Exprent {
     isSyntheticNullCheck = expr.isSyntheticNullCheck();
     wasLazyCondy = expr.wasLazyCondy;
     staticInstanceQualifier = expr.staticInstanceQualifier != null ? expr.staticInstanceQualifier.copy() : null;
+    staticInstanceQualifierString = expr.staticInstanceQualifierString;
 
     if (invocationType == InvocationType.DYNAMIC && !isStatic && instance != null && !lstParameters.isEmpty()) {
       // method reference, instance and first param are expected to be the same var object
@@ -770,6 +774,8 @@ public class InvocationExprent extends Exprent {
       // when the original bytecode called a static method via an instance reference.
       if (DecompilerContext.isRoundtripFidelity() && staticInstanceQualifier != null) {
         buf.append(staticInstanceQualifier.toJava(indent));
+      } else if (DecompilerContext.isRoundtripFidelity() && staticInstanceQualifierString != null) {
+        buf.append(staticInstanceQualifierString);
       } else {
         ClassNode node = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
         if (node == null || !classname.equals(node.classStruct.qualifiedName)) {
@@ -2053,6 +2059,14 @@ public class InvocationExprent extends Exprent {
 
   public void setStaticInstanceQualifier(Exprent qualifier) {
     this.staticInstanceQualifier = qualifier;
+  }
+
+  public String getStaticInstanceQualifierString() {
+    return staticInstanceQualifierString;
+  }
+
+  public void setStaticInstanceQualifierString(String qualifierString) {
+    this.staticInstanceQualifierString = qualifierString;
   }
 
   public String getName() {
