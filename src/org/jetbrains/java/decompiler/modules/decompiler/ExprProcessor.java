@@ -907,6 +907,54 @@ public class ExprProcessor implements CodeConstants {
              (expr instanceof VarExprent && ((VarExprent)expr).isClassDef()));
   }
 
+  private static List<? extends Exprent> inlineDupVarAssignments(List<? extends Exprent> lst) {
+    List<Exprent> result = new ArrayList<>(lst);
+    boolean changed = true;
+    while (changed) {
+      changed = false;
+      for (int i = result.size() - 2; i >= 0; i--) {
+        Exprent prev = result.get(i);
+        Exprent curr = result.get(i + 1);
+        if (!(prev instanceof AssignmentExprent prevAssign)) continue;
+        if (!(prevAssign.getLeft() instanceof VarExprent prevVar)) continue;
+        if (!(curr instanceof AssignmentExprent currAssign)) continue;
+        if (!(currAssign.getLeft() instanceof FieldExprent)) continue;
+        if (prevVar.isDefinition()) {
+          boolean usedLater = false;
+          for (int j = i + 2; j < result.size(); j++) {
+            if (rtfCountVarUses(result.get(j), prevVar) > 0) { usedLater = true; break; }
+          }
+          if (usedLater) continue;
+        }
+        if (rtfCountVarUses(curr, prevVar) != 1) continue;
+        Exprent replacement = prevAssign.getRight().copy();
+        if (!rtfReplaceVar(curr, prevVar, replacement)) continue;
+        result.remove(i);
+        changed = true;
+        break;
+      }
+    }
+    return result;
+  }
+
+  private static int rtfCountVarUses(Exprent tree, VarExprent target) {
+    int count = 0;
+    if (tree instanceof VarExprent ve && ve.getIndex() == target.getIndex() && ve.getVersion() == target.getVersion()) count++;
+    for (Exprent child : tree.getAllExprents()) count += rtfCountVarUses(child, target);
+    return count;
+  }
+
+  private static boolean rtfReplaceVar(Exprent tree, VarExprent target, Exprent replacement) {
+    for (Exprent child : tree.getAllExprents()) {
+      if (child instanceof VarExprent ve && ve.getIndex() == target.getIndex() && ve.getVersion() == target.getVersion()) {
+        tree.replaceExprent(child, replacement);
+        return true;
+      }
+      if (rtfReplaceVar(child, target, replacement)) return true;
+    }
+    return false;
+  }
+
   private static void addDeletedGotoInstructionMapping(Statement stat, TextBuffer buffer) {
     if (stat instanceof BasicBlockStatement) {
       BasicBlock block = ((BasicBlockStatement)stat).getBlock();
@@ -976,6 +1024,7 @@ public class ExprProcessor implements CodeConstants {
     // RTF: chain consecutive assignments that share a bytecode offset (from dup).
     if (DecompilerContext.isRoundtripFidelity() && lst.size() >= 2) {
       lst = chainDupAssignments(lst);
+      lst = inlineDupVarAssignments(lst);
     }
 
     for (Exprent expr : lst) {
