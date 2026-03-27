@@ -52,6 +52,11 @@ public class IfStatement extends Statement {
   // Toggled on every body swap so the layout pass can match javac's block order.
   private boolean rtfIfBodyIsFallThrough = false;
 
+  // RTF: true when the original bytecode used a 2-instruction branch pattern
+  // (ifXX + goto) where the condition-true path was the fall-through to a goto.
+  // At render time, emit if(inverted){} else{body} to reproduce the pattern.
+  private boolean rtfOriginalHadGotoFallthrough = false;
+
   private final List<Exprent> headexprent = new ArrayList<>(1); // contains IfExprent
 
   // *****************************************************************************
@@ -120,6 +125,9 @@ public class IfStatement extends Statement {
             ifstat = elsestat;  // ifstat is now the fall-through path
             negated = true;
             rtfIfBodyIsFallThrough = true;
+            // The original had: ifXX TARGET (jump over body); body; goto END
+            // This is the 2-instruction pattern that collapseElse will simplify
+            rtfOriginalHadGotoFallthrough = true;
           }
           else {
             ifstat = null;
@@ -218,6 +226,24 @@ public class IfStatement extends Statement {
     }
 
     Exprent condition = headexprent.get(0);
+
+    // RTF: when the original bytecode used ifXX+goto (2-instruction pattern),
+    // render as if(inverted){} else{body} so javac reproduces the same pattern.
+    if (DecompilerContext.isRoundtripFidelity() && rtfOriginalHadGotoFallthrough
+        && iftype == IFTYPE_IF && ifstat != null && elsestat == null && condition instanceof IfExprent) {
+      IfExprent ifExpr = (IfExprent) condition;
+      // Negate the condition for the empty-if form
+      IfExprent negated = (IfExprent) ifExpr.copy();
+      negated.negateIf();
+      buf.appendIndent(indent);
+      buf.append(negated.toJava(indent));
+      buf.append(" {").appendLineSeparator();
+      buf.appendIndent(indent).append("} else {").appendLineSeparator();
+      buf.append(ExprProcessor.jmpWrapper(ifstat, indent + 1, true));
+      buf.appendIndent(indent).append("}").appendLineSeparator();
+      return buf;
+    }
+
     buf.appendIndent(indent);
     // Condition can be null in early processing stages
     if (condition != null) {
