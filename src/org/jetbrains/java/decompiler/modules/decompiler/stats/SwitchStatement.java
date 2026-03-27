@@ -2,6 +2,8 @@
 package org.jetbrains.java.decompiler.modules.decompiler.stats;
 
 import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.code.Instruction;
+import org.jetbrains.java.decompiler.code.InstructionSequence;
 import org.jetbrains.java.decompiler.code.SwitchInstruction;
 import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
@@ -424,19 +426,44 @@ public class SwitchStatement extends Statement {
     }
 
     if (DecompilerContext.isRoundtripFidelity()) {
-      // RTF: sort case bodies by bytecode offset to match the original physical layout.
-      // Statement IDs are unreliable after structuring (merged statements get new IDs),
-      // but bytecode offsets are authoritative.
-      for (int i = 0; i < edges.size() - 1; i++) {
-        for (int j = edges.size() - 1; j > i; j--) {
-          int offsetA = nodes.get(j - 1) != null ? nodes.get(j - 1).getStartEndRange().start : Integer.MAX_VALUE;
-          int offsetB = nodes.get(j) != null ? nodes.get(j).getStartEndRange().start : Integer.MAX_VALUE;
-          // Fall back to edge index for nodes with zero offset (dummy statements)
-          if (offsetA <= 0) offsetA = edges.get(j - 1).get(0);
-          if (offsetB <= 0) offsetB = edges.get(j).get(0);
-          if (offsetA > offsetB) {
-            edges.set(j, edges.set(j - 1, edges.get(j)));
-            nodes.set(j, nodes.set(j - 1, nodes.get(j)));
+      // RTF: detect enum switches by checking if the instruction before the
+      // switch is iaload (pattern: SwitchMap[enum.ordinal()]).
+      // Enum switches must sort by edge index (case value) to preserve the
+      // $SwitchMap integer-to-enum mapping. Sorting by bytecode offset would
+      // change case order, shifting $SwitchMap assignments for ALL switches
+      // using the same enum in the class.
+      boolean isEnumSwitch = false;
+      InstructionSequence seq = bbstat.getBlock().getSeq();
+      if (seq.length() >= 2) {
+        Instruction beforeSwitch = seq.getInstr(seq.length() - 2);
+        if (beforeSwitch.opcode == CodeConstants.opc_iaload) {
+          isEnumSwitch = true;
+        }
+      }
+
+      if (isEnumSwitch) {
+        // Enum switch: sort by edge index to preserve $SwitchMap integer order
+        for (int i = 0; i < edges.size() - 1; i++) {
+          for (int j = edges.size() - 1; j > i; j--) {
+            if (edges.get(j - 1).get(0) > edges.get(j).get(0)) {
+              edges.set(j, edges.set(j - 1, edges.get(j)));
+              nodes.set(j, nodes.set(j - 1, nodes.get(j)));
+            }
+          }
+        }
+      } else {
+        // Non-enum switch: sort by bytecode offset for physical layout fidelity.
+        for (int i = 0; i < edges.size() - 1; i++) {
+          for (int j = edges.size() - 1; j > i; j--) {
+            int offsetA = nodes.get(j - 1) != null ? nodes.get(j - 1).getStartEndRange().start : Integer.MAX_VALUE;
+            int offsetB = nodes.get(j) != null ? nodes.get(j).getStartEndRange().start : Integer.MAX_VALUE;
+            // Fall back to edge index for nodes with zero offset (dummy statements)
+            if (offsetA <= 0) offsetA = edges.get(j - 1).get(0);
+            if (offsetB <= 0) offsetB = edges.get(j).get(0);
+            if (offsetA > offsetB) {
+              edges.set(j, edges.set(j - 1, edges.get(j)));
+              nodes.set(j, nodes.set(j - 1, nodes.get(j)));
+            }
           }
         }
       }

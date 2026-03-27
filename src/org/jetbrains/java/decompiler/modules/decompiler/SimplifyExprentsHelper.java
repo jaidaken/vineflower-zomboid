@@ -232,6 +232,16 @@ public class SimplifyExprentsHelper {
           res = true;
           continue;
         }
+        // RTF: fold array element self-increment + usage pattern:
+        //   arr[idx] = arr[idx] + 1;  target[arr[idx]] = val;
+        // into: target[arr[idx]++] = val;
+        // Fixes semantic bug: decompiled code reads post-increment value,
+        // but original bytecode (dup2/dup_x2) used pre-increment value.
+        if (foldArrayElementSelfIncrement(current, next)) {
+          list.remove(index);
+          res = true;
+          continue;
+        }
       }
 
       // assignment on stack
@@ -862,6 +872,80 @@ public class SimplifyExprentsHelper {
           && fa.isStatic() == fb.isStatic();
     }
     return false;
+  }
+
+  /**
+   * RTF: Folds array element self-increment followed by usage of that element.
+   * Pattern:
+   *   arr[idx] = arr[idx] + 1;  (self-increment of array element)
+   *   target[arr[idx]] = val;   (next statement reads the incremented value)
+   * becomes:
+   *   target[arr[idx]++] = val; (post-increment returns pre-increment value)
+   *
+   * This fixes a semantic bug: the original bytecode uses dup2/dup_x2 to capture
+   * the pre-increment value for use as an array index, but the split decompilation
+   * reads the post-increment value, producing incorrect behavior.
+   */
+  private static boolean foldArrayElementSelfIncrement(Exprent current, Exprent next) {
+    if (!DecompilerContext.isRoundtripFidelity()) return false;
+
+    // current must be: arr[idx] = arr[idx] + 1 (or - 1)
+    if (!(current instanceof AssignmentExprent assign)) return false;
+    if (!(assign.getLeft() instanceof ArrayExprent incArray)) return false;
+    if (!(assign.getRight() instanceof FunctionExprent func)) return false;
+    if (func.getFuncType() != FunctionType.ADD && func.getFuncType() != FunctionType.SUB) return false;
+
+    Exprent econd = func.getLstOperands().get(0);
+    Exprent econst = func.getLstOperands().get(1);
+    if (!(econst instanceof ConstExprent) && econd instanceof ConstExprent && func.getFuncType() == FunctionType.ADD) {
+      econd = econst;
+      econst = func.getLstOperands().get(0);
+    }
+    if (!(econst instanceof ConstExprent) || !((ConstExprent) econst).hasValueOne()) return false;
+    // Self-increment: left side array element equals the addend
+    if (!incArray.equals(econd)) return false;
+
+    // Find the matching array element read in 'next' used as an array index
+    Pair<Exprent, ArrayExprent> found = findArrayExprAsIndex(incArray, next);
+    if (found == null) return false;
+
+    // Create post-increment: arr[idx]++ (IPP returns old value, then increments)
+    FunctionType type = func.getFuncType() == FunctionType.ADD ? FunctionType.IPP : FunctionType.IMM;
+    FunctionExprent postInc = new FunctionExprent(type, found.b, func.bytecode);
+    postInc.setImplicitType(VarType.VARTYPE_INT);
+
+    // Replace the found array read with the post-increment in the parent
+    found.a.replaceExprent(found.b, postInc);
+    return true;
+  }
+
+  /**
+   * Finds an ArrayExprent in the expression tree that equals 'target' and is used
+   * as the index of another ArrayExprent. Returns (parent, found) for replacement,
+   * or null if not found.
+   */
+  private static Pair<Exprent, ArrayExprent> findArrayExprAsIndex(ArrayExprent target, Exprent expr) {
+    return findArrayExprAsIndexRec(target, expr, null);
+  }
+
+  private static Pair<Exprent, ArrayExprent> findArrayExprAsIndexRec(ArrayExprent target, Exprent expr, Exprent parent) {
+    if (expr instanceof ArrayExprent arrExpr) {
+      // Check if this array's index equals our target
+      if (arrExpr.getIndex() instanceof ArrayExprent indexArr && indexArr.equals(target)) {
+        return Pair.of((Exprent) arrExpr, indexArr);
+      }
+      // Recurse into array part
+      Pair<Exprent, ArrayExprent> result = findArrayExprAsIndexRec(target, arrExpr.getArray(), arrExpr);
+      if (result != null) return result;
+      // Recurse into index part
+      return findArrayExprAsIndexRec(target, arrExpr.getIndex(), arrExpr);
+    }
+    // For all other expression types, recurse into sub-expressions
+    for (Exprent sub : expr.getAllExprents()) {
+      Pair<Exprent, ArrayExprent> result = findArrayExprAsIndexRec(target, sub, expr);
+      if (result != null) return result;
+    }
+    return null;
   }
 
   /**
