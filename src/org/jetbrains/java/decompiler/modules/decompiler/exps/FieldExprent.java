@@ -38,6 +38,7 @@ public class FieldExprent extends Exprent {
   private boolean forceQualified = false;
   private boolean isQualifier = false;
   private boolean wasCondy = false;
+  private boolean rtfThisQualified = false;
 
   public FieldExprent(LinkConstant cn, Exprent instance, BitSet bytecodeOffsets) {
     this(cn.elementname, cn.classname, instance == null, instance, FieldDescriptor.parseDescriptor(cn.descriptor), bytecodeOffsets);
@@ -132,7 +133,9 @@ public class FieldExprent extends Exprent {
 
   @Override
   public Exprent copy() {
-    return new FieldExprent(name, classname, isStatic, instance == null ? null : instance.copy(), descriptor, bytecode, forceQualified, wasCondy);
+    FieldExprent copied = new FieldExprent(name, classname, isStatic, instance == null ? null : instance.copy(), descriptor, bytecode, forceQualified, wasCondy);
+    copied.rtfThisQualified = this.rtfThisQualified;
+    return copied;
   }
 
   private boolean isAmbiguous() {
@@ -161,7 +164,9 @@ public class FieldExprent extends Exprent {
         buf.append(".class");
         return buf;
       }
-      if (useQualifiedStatic()) {
+      if (rtfThisQualified && DecompilerContext.isRoundtripFidelity()) {
+        buf.append("this.");
+      } else if (useQualifiedStatic()) {
         buf.appendAllClasses(DecompilerContext.getImportCollector().getShortNameInClassContext(ExprProcessor.buildJavaClassName(classname)), classname);
         buf.append(".");
       }
@@ -308,6 +313,14 @@ public class FieldExprent extends Exprent {
 
   public void forceQualified(boolean value) {
     this.forceQualified = value;
+  }
+
+  public boolean isRtfThisQualified() {
+    return rtfThisQualified;
+  }
+
+  public void setRtfThisQualified(boolean value) {
+    this.rtfThisQualified = value;
   }
 
   @Override
