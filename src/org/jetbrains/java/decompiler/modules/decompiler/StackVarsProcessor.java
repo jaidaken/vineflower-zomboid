@@ -415,6 +415,19 @@ public class StackVarsProcessor {
       return;
     }
 
+    // RTF: suppress copy propagation for regular-to-regular variable copies
+    // of primitive types. These are true bytecode copies (store/load pairs)
+    // that javac needs to reproduce for bytecode fidelity.
+    // Object-type copies must still be propagated because catch variable
+    // type narrowing (e.g., ParserConfigurationException = Exception)
+    // requires inlining to compile correctly.
+    if (DecompilerContext.isRoundtripFidelity()
+        && !left.isStack() && right instanceof VarExprent && !((VarExprent) right).isStack()
+        && left.getVarType().type != CodeType.OBJECT) {
+      setRet(ret, -1, changed);
+      return;
+    }
+
     if ((useflags & Exprent.MULTIPLE_USES) == 0 && (notdom || usedVers.size() > 1)) {
       setRet(ret, -1, changed);
       return;
