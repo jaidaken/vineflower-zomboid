@@ -253,11 +253,41 @@ public final class SwitchHelper {
       following.getCaseValues().addAll(realCaseValues);
 
       Exprent followingVal = ((SwitchHeadExprent)following.getHeadexprent()).getValue();
-      following.getHeadexprent().replaceExprent(followingVal, ((InvocationExprent)value).getInstance());
+      Exprent switchInstance = ((InvocationExprent)value).getInstance();
+      following.getHeadexprent().replaceExprent(followingVal, switchInstance);
 
       List<Exprent> firsts = switchStatement.getFirst().getExprents();
       if (firsts.size() > 0) {
         firsts.remove(firsts.size() - 1);
+      }
+
+      // Eliminate redundant parameter copy before string switch.
+      // Bytecode pattern: String copyVar = param; switch(copyVar.hashCode()) { ... }
+      // After simplification this becomes: String copyVar = param; switch(copyVar) { ... }
+      // When copyVar is only used in the switch head, replace it with param directly.
+      if (switchInstance instanceof VarExprent) {
+        VarExprent copyVar = (VarExprent) switchInstance;
+        // Find the assignment of the copy variable in the setup block
+        for (int j = firsts.size() - 1; j >= 0; j--) {
+          Exprent expr = firsts.get(j);
+          if (expr instanceof AssignmentExprent) {
+            AssignmentExprent assign = (AssignmentExprent) expr;
+            if (assign.getLeft() instanceof VarExprent
+                && ((VarExprent) assign.getLeft()).getIndex() == copyVar.getIndex()
+                && ((VarExprent) assign.getLeft()).getVersion() == copyVar.getVersion()
+                && assign.getRight() instanceof VarExprent) {
+              // Check that the copy variable is not referenced in the switch body.
+              // Whitelist the switch head instance since we will replace it.
+              if (!copyVar.isVarReferenced(following, (VarExprent) switchInstance)) {
+                // Replace the switch head with the original variable
+                Exprent original = assign.getRight();
+                following.getHeadexprent().replaceExprent(switchInstance, original);
+                firsts.remove(j);
+              }
+              break;
+            }
+          }
+        }
       }
       switchStatement.getFirst().getAllPredecessorEdges().forEach(switchStatement.getFirst()::removePredecessor);
       switchStatement.getFirst().getAllSuccessorEdges().forEach(switchStatement.getFirst()::removeSuccessor);

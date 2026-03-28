@@ -458,6 +458,14 @@ public class MethodProcessor implements Runnable {
         SequenceHelper.condenseSequences(root);
         decompileRecord.add("EliminateDeadCode", root);
       }
+
+      // Remove dead variable stores: assignments like "var = otherVar" or
+      // "var = constant" where the assigned variable is never read anywhere
+      // in the method. These originate from bytecode patterns like
+      // aload X; astore Y where slot Y is never used.
+      if (DeadStoreEliminator.eliminateDeadStores(root)) {
+        decompileRecord.add("EliminateDeadStores", root);
+      }
     }
 
     // this has to be done after all inlining is done so the case values do not get reverted
