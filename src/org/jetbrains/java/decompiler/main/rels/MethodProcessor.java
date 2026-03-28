@@ -5,6 +5,7 @@ import org.jetbrains.java.decompiler.api.java.JavaPassLocation;
 import org.jetbrains.java.decompiler.api.plugin.LanguageSpec;
 import org.jetbrains.java.decompiler.api.plugin.pass.PassContext;
 import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.code.Instruction;
 import org.jetbrains.java.decompiler.code.InstructionSequence;
 import org.jetbrains.java.decompiler.code.cfg.ControlFlowGraph;
 import org.jetbrains.java.decompiler.code.cfg.ExceptionRangeCFG;
@@ -24,15 +25,19 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarTypeProcessor;
+import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.DotExporter;
 import org.jetbrains.java.decompiler.util.StartEndPair;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class MethodProcessor implements Runnable {
   public static ThreadLocal<RootStatement> debugCurrentlyDecompiling = ThreadLocal.withInitial(() -> null);
@@ -606,6 +611,15 @@ public class MethodProcessor implements Runnable {
       }
     }
 
+    // RTF: re-introduce dead variable-to-variable stores that were eliminated
+    // by SSA optimization. The original bytecode has these as load/store pairs,
+    // and javac preserves them on recompilation.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      if (reintroduceDeadStores(root, mt, varProc)) {
+        decompileRecord.add("ReintroduceDeadStores", root);
+      }
+    }
+
     // Mark oddities in the decompiled code (left behind monitors, <unknown> variables, etc.)
     // No decompile record as statement structure is not modified
     ExprProcessor.markExprOddities(root);
@@ -977,6 +991,140 @@ public class MethodProcessor implements Runnable {
 
   public boolean isFinished() {
     return finished;
+  }
+
+  /**
+   * RTF: re-introduce dead variable-to-variable stores from the original bytecode.
+   * Scans the instruction sequence for load+store pairs where the destination slot
+   * is never loaded from in the entire method. These are dead stores that Vineflower's
+   * SSA optimization eliminated but javac would preserve on recompilation.
+   * Adds them as assignments in the first statement's exprents.
+   */
+  private static boolean reintroduceDeadStores(RootStatement root, StructMethod mt, VarProcessor varProc) {
+    InstructionSequence seq = mt.getInstructionSequence();
+    if (seq == null) return false;
+
+    // Determine parameter slot range
+    MethodDescriptor desc = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+    int paramSlotEnd = mt.hasModifier(CodeConstants.ACC_STATIC) ? 0 : 1;
+    for (VarType p : desc.params) {
+      paramSlotEnd += p.stackSize;
+    }
+
+    // Collect all slots that are loaded from (read) anywhere in the bytecode
+    Set<Integer> loadedSlots = new HashSet<>();
+    for (int i = 0; i < seq.length(); i++) {
+      int slot = getLoadSlot(seq.getInstr(i));
+      if (slot >= 0) {
+        loadedSlots.add(slot);
+      }
+    }
+
+    // Find load+store pairs where:
+    // - Source is a parameter slot (safe to reference at method start)
+    // - Destination slot is never loaded from in the method
+    // - Source and destination are different slots
+    Set<String> seen = new HashSet<>();
+    List<int[]> deadStores = new ArrayList<>();
+    for (int i = 0; i < seq.length() - 1; i++) {
+      Instruction load = seq.getInstr(i);
+      Instruction store = seq.getInstr(i + 1);
+      int srcSlot = getLoadSlot(load);
+      int dstSlot = getStoreSlot(store);
+      if (srcSlot >= 0 && dstSlot >= 0 && srcSlot != dstSlot
+          && srcSlot < paramSlotEnd
+          && !loadedSlots.contains(dstSlot)
+          && seen.add(srcSlot + "->" + dstSlot)) {
+        deadStores.add(new int[]{srcSlot, dstSlot});
+      }
+    }
+
+    if (deadStores.isEmpty()) return false;
+
+    // Find the first statement with exprents to insert into
+    Statement first = root.getFirst();
+    while (first != null && first.getExprents() == null && !first.getStats().isEmpty()) {
+      first = first.getFirst();
+    }
+    if (first == null || first.getExprents() == null) return false;
+
+    boolean changed = false;
+    for (int[] ds : deadStores) {
+      int srcSlot = ds[0];
+      int dstSlot = ds[1];
+
+      // Check that the destination variable doesn't already exist in the AST
+      if (isSlotReferencedInAST(root, dstSlot, varProc)) continue;
+
+      // Find the source variable's type from VarProcessor
+      VarType srcType = varProc.getVarType(new VarVersionPair(srcSlot, 0));
+      if (srcType == null) srcType = VarType.VARTYPE_INT;
+
+      // Create the dead store assignment: dstVar = srcVar
+      VarExprent srcVar = new VarExprent(srcSlot, srcType, varProc);
+      VarExprent dstVar = new VarExprent(dstSlot, srcType, varProc);
+      dstVar.setDefinition(true);
+      AssignmentExprent assign = new AssignmentExprent(dstVar, srcVar, null);
+
+      first.getExprents().add(0, assign);
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  /** Get the local variable slot loaded by this instruction, or -1 if not a load. */
+  private static int getLoadSlot(Instruction instr) {
+    int op = instr.opcode;
+    if (op >= CodeConstants.opc_iload && op <= CodeConstants.opc_aload) {
+      return instr.operand(0);
+    }
+    if (op >= CodeConstants.opc_iload_0 && op <= CodeConstants.opc_aload_3) {
+      return (op - CodeConstants.opc_iload_0) % 4;
+    }
+    return -1;
+  }
+
+  /** Get the local variable slot stored by this instruction, or -1 if not a store. */
+  private static int getStoreSlot(Instruction instr) {
+    int op = instr.opcode;
+    if (op >= CodeConstants.opc_istore && op <= CodeConstants.opc_astore) {
+      return instr.operand(0);
+    }
+    if (op >= CodeConstants.opc_istore_0 && op <= CodeConstants.opc_astore_3) {
+      return (op - CodeConstants.opc_istore_0) % 4;
+    }
+    return -1;
+  }
+
+  /** Check if a bytecode slot is referenced in the final AST (via VarProcessor mapping). */
+  private static boolean isSlotReferencedInAST(Statement stat, int slot, VarProcessor varProc) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (exprReferencesSlot(expr, slot, varProc)) return true;
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      if (exprReferencesSlot(expr, slot, varProc)) return true;
+    }
+    for (Statement child : stat.getStats()) {
+      if (isSlotReferencedInAST(child, slot, varProc)) return true;
+    }
+    return false;
+  }
+
+  private static boolean exprReferencesSlot(Exprent expr, int slot, VarProcessor varProc) {
+    if (expr instanceof VarExprent ve) {
+      int origSlot = varProc.getOriginalVarIndex(ve.getIndex());
+      if (origSlot == slot) return true;
+    }
+    for (Exprent sub : expr.getAllExprents(true)) {
+      if (sub instanceof VarExprent ve) {
+        int origSlot = varProc.getOriginalVarIndex(ve.getIndex());
+        if (origSlot == slot) return true;
+      }
+    }
+    return false;
   }
 
 }
