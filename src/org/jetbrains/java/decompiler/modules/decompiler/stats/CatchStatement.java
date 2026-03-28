@@ -194,7 +194,11 @@ public class CatchStatement extends Statement {
             || "java/lang/ReflectiveOperationException".equals(excType)) {
           shouldWiden = true;
         } else if ("java/lang/InterruptedException".equals(excType)) {
-          shouldWiden = !tryBodyCanThrowException(first, "java.lang.InterruptedException");
+          // Don't widen InterruptedException - keep the original bytecode type.
+          // The tryBodyCanThrowException check is unreliable (fails to detect
+          // Thread.sleep inside nested loops/blocks). InterruptedException is
+          // common enough that preserving it from bytecode is safer.
+          shouldWiden = false;
         }
         if (shouldWiden) {
           // Check if another catch clause already handles Exception

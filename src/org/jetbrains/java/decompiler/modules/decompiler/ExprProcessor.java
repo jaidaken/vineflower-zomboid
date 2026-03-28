@@ -425,7 +425,7 @@ public class ExprProcessor implements CodeConstants {
         case opc_ifge:
         case opc_ifgt:
         case opc_ifle:
-          exprlist.add(new IfExprent(func5[instr.opcode - opc_ifeq].getNegative(), stack, bytecode_offsets));
+          exprlist.add(new IfExprent(func5[instr.opcode - opc_ifeq].getNegative(), stack, bytecode_offsets, instr.opcode));
           break;
         case opc_if_icmpeq:
         case opc_if_icmpne:
@@ -435,11 +435,11 @@ public class ExprProcessor implements CodeConstants {
         case opc_if_icmple:
         case opc_if_acmpeq:
         case opc_if_acmpne:
-          exprlist.add(new IfExprent(func6[instr.opcode - opc_if_icmpeq].getNegative(), stack, bytecode_offsets));
+          exprlist.add(new IfExprent(func6[instr.opcode - opc_if_icmpeq].getNegative(), stack, bytecode_offsets, instr.opcode));
           break;
         case opc_ifnull:
         case opc_ifnonnull:
-          exprlist.add(new IfExprent(func7[instr.opcode - opc_ifnull].getNegative(), stack, bytecode_offsets));
+          exprlist.add(new IfExprent(func7[instr.opcode - opc_ifnull].getNegative(), stack, bytecode_offsets, instr.opcode));
           break;
         case opc_tableswitch:
         case opc_lookupswitch:

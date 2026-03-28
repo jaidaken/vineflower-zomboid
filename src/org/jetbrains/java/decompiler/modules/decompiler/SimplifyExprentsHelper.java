@@ -1271,9 +1271,11 @@ public class SimplifyExprentsHelper {
           || (invocation.isStatic() && invocation.getClassname().equals("java/util/Objects") && invocation.getName().equals("requireNonNull")
               && invocation.getStringDescriptor().equals("(Ljava/lang/Object;)Ljava/lang/Object;"))) { // J9+
 
-        if (invocation.isSyntheticNullCheck()) {
-          return true;
-        }
+        // Don't strip based on syntheticNullCheck flag alone — the heuristic
+        // (next opcode is a constant load) catches standalone null checks like
+        // Objects.requireNonNull(param) before a loop counter init (iconst_0)
+        // or a float literal (ldc). Fall through to verify there's actually an
+        // inner class creation in the next expression.
 
         Deque<Exprent> lstExprents = new ArrayDeque<>();
         lstExprents.add(second);

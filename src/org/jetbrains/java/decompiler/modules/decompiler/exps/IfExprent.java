@@ -65,11 +65,22 @@ public class IfExprent extends Exprent {
   // flipped from the original bytecode direction.
   private Type originalBytecodeType;
 
+  // RTF: the raw bytecode opcode (e.g. Opcodes.IFNE = 154). Set once by
+  // ExprProcessor at construction, never modified, never copied. Copies
+  // get 0 which means "not from original bytecode". This field survives
+  // all transformation passes because it is never touched by copy/negate.
+  private int rawBytecodeOpcode;
+
   public IfExprent(Type ifType, ListStack<Exprent> stack, BitSet bytecodeOffsets) {
+    this(ifType, stack, bytecodeOffsets, 0);
+  }
+
+  public IfExprent(Type ifType, ListStack<Exprent> stack, BitSet bytecodeOffsets, int rawOpcode) {
     this(null, bytecodeOffsets);
     // ifType is already the NEGATED form (ExprProcessor calls getNegative()).
     // The original bytecode type is the negation of ifType.
     this.originalBytecodeType = (ifType != Type.VALUE) ? ifType.getNegative() : null;
+    this.rawBytecodeOpcode = rawOpcode;
 
     if (ifType.ordinal() <= Type.LE.ordinal()) {
       stack.push(new ConstExprent(0, true, null));
@@ -85,6 +96,15 @@ public class IfExprent extends Exprent {
     return originalBytecodeType;
   }
 
+  /**
+   * RTF: returns the raw bytecode opcode (e.g. IFNE=154, IFEQ=153).
+   * Returns 0 if this IfExprent was not constructed directly from bytecode
+   * (i.e. it is a copy or was created by a transformation pass).
+   */
+  public int getRawBytecodeOpcode() {
+    return rawBytecodeOpcode;
+  }
+
   private IfExprent(Exprent condition, BitSet bytecodeOffsets) {
     super(Exprent.Type.IF);
     this.condition = condition;
@@ -96,6 +116,12 @@ public class IfExprent extends Exprent {
   public Exprent copy() {
     IfExprent copy = new IfExprent(condition.copy(), bytecode);
     copy.originalBytecodeType = this.originalBytecodeType;
+    // rawBytecodeOpcode is an absolute fact ("the original bytecode was IFNE")
+    // and its meaning does not change when the condition is transformed.
+    // Unlike originalBytecodeType, which represents a comparison type that
+    // gets reinterpreted by transformations, rawBytecodeOpcode is just the
+    // raw JVM opcode integer. Safe to copy.
+    copy.rawBytecodeOpcode = this.rawBytecodeOpcode;
     return copy;
   }
 

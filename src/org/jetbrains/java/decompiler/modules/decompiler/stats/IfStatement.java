@@ -8,6 +8,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
 import org.jetbrains.java.decompiler.modules.decompiler.SecondaryFunctionsHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.ValidationHelper;
+import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
@@ -238,8 +239,21 @@ public class IfStatement extends Statement {
     if (DecompilerContext.isRoundtripFidelity()
         && iftype == IFTYPE_IF && ifstat != null && elsestat == null
         && condition instanceof IfExprent && rtfIsGuardClauseAtMethodEnd()) {
+      // Both branches return, so the polarity correction is always safe here.
+      // Use rawBytecodeOpcode to determine if the condition needs negation.
+      IfExprent guardExpr = (IfExprent) condition;
+      int rawOp = guardExpr.getRawBytecodeOpcode();
+      Exprent renderCond = condition;
+      if (rawOp >= CodeConstants.opc_ifeq && rawOp <= CodeConstants.opc_ifle) {
+        int expectedOp = rtfGuardClauseExpectedOpcode(guardExpr.getCondition());
+        if (expectedOp != 0 && expectedOp != rawOp) {
+          IfExprent negated = (IfExprent) guardExpr.copy();
+          negated.negateIf();
+          renderCond = negated;
+        }
+      }
       buf.appendIndent(indent);
-      buf.append(condition.toJava(indent));
+      buf.append(renderCond.toJava(indent));
       buf.append(" {").appendLineSeparator();
       buf.appendIndent(indent + 1).append("return;").appendLineSeparator();
       buf.appendIndent(indent).append("}").appendLineSeparator();
@@ -738,6 +752,28 @@ public class IfStatement extends Statement {
     }
 
     return null;
+  }
+
+  /**
+   * RTF: determine what ifeq..ifle opcode javac would emit for a guard clause condition.
+   * For {@code if (x) { return; }}, javac emits IFEQ (skip body when x==0).
+   * For {@code if (!x) { return; }}, javac emits IFNE (skip body when x!=0).
+   * Returns 0 if the pattern is not recognized.
+   */
+  private static int rtfGuardClauseExpectedOpcode(Exprent cond) {
+    // Bare boolean (variable, field, method call): if(x) -> IFEQ
+    if (cond instanceof VarExprent || cond instanceof FieldExprent
+        || cond instanceof InvocationExprent) {
+      return CodeConstants.opc_ifeq;
+    }
+    if (cond instanceof FunctionExprent) {
+      FunctionExprent func = (FunctionExprent) cond;
+      // BOOL_NOT: if(!x) -> IFNE
+      if (func.getFuncType() == FunctionType.BOOL_NOT) {
+        return CodeConstants.opc_ifne;
+      }
+    }
+    return 0;
   }
 
   /** Map a FunctionType comparison operator to the corresponding IfExprent.Type for negation lookup. */
