@@ -2,6 +2,7 @@
 package org.jetbrains.java.decompiler.modules.decompiler.stats;
 
 import org.jetbrains.java.decompiler.main.DecompilerContext;
+import org.jetbrains.java.decompiler.main.rels.MethodWrapper;
 import org.jetbrains.java.decompiler.modules.decompiler.DecHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
@@ -9,6 +10,8 @@ import org.jetbrains.java.decompiler.modules.decompiler.SecondaryFunctionsHelper
 import org.jetbrains.java.decompiler.modules.decompiler.ValidationHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
+import org.jetbrains.java.decompiler.struct.gen.CodeType;
+import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
 import org.jetbrains.java.decompiler.struct.match.IMatchable;
 import org.jetbrains.java.decompiler.struct.match.MatchEngine;
 import org.jetbrains.java.decompiler.struct.match.MatchNode;
@@ -227,6 +230,21 @@ public class IfStatement extends Statement {
     }
 
     Exprent condition = headexprent.get(0);
+
+    // RTF: guard clause at method end - when the if-body is an empty return that
+    // was stripped by removeRedundantReturns, emit if(cond){return;} instead of
+    // if(cond){;} so javac produces IFEQ+RETURN+RETURN (2 returns) matching the
+    // original bytecode.
+    if (DecompilerContext.isRoundtripFidelity()
+        && iftype == IFTYPE_IF && ifstat != null && elsestat == null
+        && condition instanceof IfExprent && rtfIsGuardClauseAtMethodEnd()) {
+      buf.appendIndent(indent);
+      buf.append(condition.toJava(indent));
+      buf.append(" {").appendLineSeparator();
+      buf.appendIndent(indent + 1).append("return;").appendLineSeparator();
+      buf.appendIndent(indent).append("}").appendLineSeparator();
+      return buf;
+    }
 
     // RTF: when the original bytecode used ifXX+goto (2-instruction pattern),
     // render as if(inverted){} else{body} so javac reproduces the same pattern.
@@ -733,6 +751,51 @@ public class IfStatement extends Statement {
       case LE: return IfExprent.Type.LE;
       default: return null;
     }
+  }
+
+  /**
+   * RTF: detect when this IfStatement is a guard clause at the end of a void method.
+   *
+   * The pattern: the if-body is a BasicBlock with empty exprents (the void return
+   * was stripped by removeRedundantReturns), and the IfStatement is the last
+   * statement before method end (successor edges go to DummyExitStatement or
+   * are absent). The method must return void.
+   *
+   * When true, toJava should emit if(cond){return;} instead of the empty-then
+   * trick, so javac produces IFEQ+RETURN+RETURN matching the original bytecode.
+   */
+  private boolean rtfIsGuardClauseAtMethodEnd() {
+    // Check if-body is a BasicBlock with empty exprents (return was stripped)
+    if (!(ifstat instanceof BasicBlockStatement)) {
+      return false;
+    }
+    List<Exprent> bodyExprents = ifstat.getExprents();
+    if (bodyExprents == null || !bodyExprents.isEmpty()) {
+      return false;
+    }
+
+    // Check the method returns void
+    MethodWrapper mw = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+    if (mw == null) {
+      return false;
+    }
+    MethodDescriptor md = mw.desc();
+    if (md.ret.type != CodeType.VOID) {
+      return false;
+    }
+
+    // Check this IfStatement is at the end of the method:
+    // its successor edges should be empty or go to DummyExitStatement
+    List<StatEdge> succs = this.getAllSuccessorEdges();
+    if (succs.isEmpty()) {
+      return true;
+    }
+    for (StatEdge edge : succs) {
+      if (!(edge.getDestination() instanceof DummyExitStatement)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   public void fixIfInvariantEmptyElseBranch() {
