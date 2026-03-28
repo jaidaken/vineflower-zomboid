@@ -837,32 +837,6 @@ public class VarDefinitionHelper {
           return true;
         }
       }
-      // Do-while body executes at least once before the condition check.
-      // If the body definitely assigns the variable before any read,
-      // the variable is definitely assigned after the loop.
-      if (doStat.getLooptype() == DoStatement.Type.DO_WHILE) {
-        Statement body = doStat.getFirst();
-        if (body != null && isDefinitelyAssignedImpl(body, varIndex, depth + 1)) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    // For synchronized blocks: the body always executes (the monitor is entered
-    // unconditionally). If the body definitely assigns the variable before any
-    // read, the variable is definitely assigned after the synchronized block.
-    if (stat.type == Statement.StatementType.SYNCHRONIZED) {
-      SynchronizedStatement syncStat = (SynchronizedStatement) stat;
-      // Check if the monitor expression reads the variable
-      Exprent headExpr = syncStat.getHeadexprent();
-      if (headExpr != null && exprReadsVar(headExpr, varIndex)) {
-        return false;
-      }
-      Statement body = syncStat.getBody();
-      if (body != null) {
-        return isDefinitelyAssignedImpl(body, varIndex, depth + 1);
-      }
       return false;
     }
 
@@ -873,20 +847,19 @@ public class VarDefinitionHelper {
     if (stat.type == Statement.StatementType.TRY_CATCH || stat.type == Statement.StatementType.CATCH_ALL) {
       if (stat.getFirst() != null) {
         Statement tryBody = stat.getFirst();
-        // Case 1: first exprent assigns the variable (including nested assignments).
-        // Walk through nested sequences to find the first basic block with exprents.
-        Statement cursor = tryBody;
-        while (cursor != null) {
-          if (cursor.getExprents() != null && !cursor.getExprents().isEmpty()) {
-            Exprent firstExpr = cursor.getExprents().get(0);
+        // Case 1: first exprent assigns the variable (including nested assignments)
+        if (tryBody.getExprents() != null && !tryBody.getExprents().isEmpty()) {
+          Exprent firstExpr = tryBody.getExprents().get(0);
+          if (!exprReadsVar(firstExpr, varIndex) && exprAssignsVarDeep(firstExpr, varIndex)) {
+            return true;
+          }
+        } else if (tryBody.type == Statement.StatementType.SEQUENCE && !tryBody.getStats().isEmpty()) {
+          Statement firstChild = tryBody.getStats().get(0);
+          if (firstChild.getExprents() != null && !firstChild.getExprents().isEmpty()) {
+            Exprent firstExpr = firstChild.getExprents().get(0);
             if (!exprReadsVar(firstExpr, varIndex) && exprAssignsVarDeep(firstExpr, varIndex)) {
               return true;
             }
-            break;
-          } else if (cursor.type == Statement.StatementType.SEQUENCE && !cursor.getStats().isEmpty()) {
-            cursor = cursor.getStats().get(0);
-          } else {
-            break;
           }
         }
         // Case 2: variable is assigned somewhere in the try body AND all catch
