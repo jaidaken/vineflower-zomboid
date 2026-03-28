@@ -837,6 +837,26 @@ public class VarDefinitionHelper {
           return true;
         }
       }
+      // For do-while and infinite loops: the body always executes at least once.
+      // If the very first exprent in the body is a safe assignment to the variable
+      // (RHS cannot throw), the variable is definitely assigned.
+      if (doStat.getLooptype() == DoStatement.Type.DO_WHILE
+          || doStat.getLooptype() == DoStatement.Type.INFINITE) {
+        if (isFirstExprentSafeAssignment(doStat.getFirst(), varIndex)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // For synchronized blocks: the body always executes after the monitor is entered.
+    // If the very first exprent in the body is a safe assignment to the variable
+    // (RHS cannot throw), the variable is definitely assigned.
+    if (stat.type == Statement.StatementType.SYNCHRONIZED) {
+      SynchronizedStatement syncStat = (SynchronizedStatement) stat;
+      if (isFirstExprentSafeAssignment(syncStat.getBody(), varIndex)) {
+        return true;
+      }
       return false;
     }
 
@@ -996,6 +1016,77 @@ public class VarDefinitionHelper {
       }
       return ifStat.getIfstat() != null && statementTerminates(ifStat.getIfstat());
     }
+    return false;
+  }
+
+  /**
+   * Checks if the very first exprent in a statement body is a safe assignment
+   * to the given variable. "Safe" means the right-hand side cannot throw an exception.
+   * Walks into sequences to find the first basic block.
+   */
+  private static boolean isFirstExprentSafeAssignment(Statement body, int varIndex) {
+    if (body == null) return false;
+
+    // Walk into sequences to find the first basic block
+    Statement target = body;
+    while (target.type == Statement.StatementType.SEQUENCE && !target.getStats().isEmpty()) {
+      target = target.getStats().get(0);
+    }
+
+    if (target.getExprents() == null || target.getExprents().isEmpty()) {
+      return false;
+    }
+
+    Exprent firstExpr = target.getExprents().get(0);
+    // Must be a direct assignment (not nested) to our variable
+    if (!(firstExpr instanceof AssignmentExprent assign)) return false;
+    Exprent left = assign.getLeft();
+    if (!(left instanceof VarExprent) || ((VarExprent) left).getIndex() != varIndex) return false;
+    // The right-hand side must not be able to throw
+    return isExprSafe(assign.getRight());
+  }
+
+  /**
+   * Checks if an expression is guaranteed not to throw an exception.
+   * Safe expressions: local variable loads, constants, and arithmetic/bitwise/cast
+   * operations on safe sub-expressions. Unsafe: method calls, field reads, array
+   * access, new expressions, instanceof, casts that may fail.
+   */
+  private static boolean isExprSafe(Exprent expr) {
+    if (expr instanceof VarExprent) return true;
+    if (expr instanceof ConstExprent) return true;
+    if (expr instanceof FunctionExprent func) {
+      FunctionExprent.FunctionType ft = func.getFuncType();
+      switch (ft) {
+        // Arithmetic, bitwise, unary - safe if operands are safe
+        case ADD: case SUB: case MUL: case DIV: case REM:
+        case AND: case OR: case XOR:
+        case SHL: case SHR: case USHR:
+        case BIT_NOT: case BOOL_NOT: case NEG:
+        // Primitive widening/narrowing casts - never throw
+        case I2L: case I2F: case I2D:
+        case L2I: case L2F: case L2D:
+        case F2I: case F2L: case F2D:
+        case D2I: case D2L: case D2F:
+        case I2B: case I2C: case I2S:
+        // Comparisons - safe if operands are safe
+        case LCMP: case FCMPL: case FCMPG: case DCMPL: case DCMPG:
+          for (Exprent operand : func.getLstOperands()) {
+            if (!isExprSafe(operand)) return false;
+          }
+          return true;
+        // Ternary - safe if all three parts are safe
+        case TERNARY:
+          for (Exprent operand : func.getLstOperands()) {
+            if (!isExprSafe(operand)) return false;
+          }
+          return true;
+        default:
+          // CAST, INSTANCEOF, ARRAY_LENGTH, IPP/IMM/PPI/MMI - not safe
+          return false;
+      }
+    }
+    // Method calls, field reads, array access, new, etc. - not safe
     return false;
   }
 
