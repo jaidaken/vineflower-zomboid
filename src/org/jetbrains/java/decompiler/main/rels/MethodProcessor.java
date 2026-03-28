@@ -253,6 +253,19 @@ public class MethodProcessor implements Runnable {
       decompileRecord.add("SetVarVersions_PPMM_" + stackVarsProcessed, root);
     } while (new PPandMMHelper(varProc).findPPandMM(root));
 
+    // Reconstruct post-increment expressions (temp = var; ++var -> temp = var++)
+    PPandMMHelper ppmmHelper = new PPandMMHelper(varProc);
+    if (ppmmHelper.reconstructPostIncrement(root)) {
+      decompileRecord.add("ReconstructPostIncrement", root);
+
+      // Run another round of stack simplification to inline the post-increment assignments
+      StackVarsProcessor.simplifyStackVars(root, mt, cl);
+      decompileRecord.add("SimplifyStackVars_PostInc", root);
+
+      varProc.setVarVersions(root);
+      decompileRecord.add("SetVarVersions_PostInc", root);
+    }
+
     PassContext pctx = new PassContext(root, graph, mt, cl, varProc, decompileRecord);
 
     // Inline ppi/mmi that we may have missed
@@ -379,6 +392,18 @@ public class MethodProcessor implements Runnable {
       if (root.hasTryCatch() && TryHelper.inlineTwrReturnVars(root)) {
         // SequenceHelper.condenseSequences(root);
         decompileRecord.add("InlineTwrReturnVars", root);
+        continue;
+      }
+
+      // RTF: inline temp return variables introduced by try-finally desugaring.
+      // The pattern:
+      //   Type var = default; try { ...; var = value; } finally { cleanup; } return var;
+      // becomes:
+      //   try { ...; return value; } finally { cleanup; }
+      if (DecompilerContext.isRoundtripFidelity()
+          && root.hasTryCatch()
+          && TryHelper.inlineFinallyReturnVars(root)) {
+        decompileRecord.add("InlineFinallyReturnVars", root);
         continue;
       }
 
@@ -515,6 +540,16 @@ public class MethodProcessor implements Runnable {
 
     if (ExprProcessor.canonicalizeCasts(root)) {
       decompileRecord.add("CanonicalizeCasts", root);
+    }
+
+    // RTF: replace duplicate field reads in if-conditions with the variable
+    // that was assigned from the same field in the head block. The original
+    // bytecode used DUP to share a single field read; Vineflower splits this
+    // into separate reads. This pass eliminates the redundant field access.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      if (ExprProcessor.replaceDupFieldReadsInConditions(root)) {
+        decompileRecord.add("ReplaceDupFieldReads", root);
+      }
     }
 
     // Apply plugin passes after setting variable definitions

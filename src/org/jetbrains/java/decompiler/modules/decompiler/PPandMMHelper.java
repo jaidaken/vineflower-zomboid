@@ -1,6 +1,7 @@
 // Copyright 2000-2017 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license that can be found in the LICENSE file.
 package org.jetbrains.java.decompiler.modules.decompiler;
 
+import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.AssignmentExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.ConstExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
@@ -23,6 +24,7 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 
 public class PPandMMHelper {
 
@@ -63,6 +65,132 @@ public class PPandMMHelper {
     }
 
     return res;
+  }
+
+  /**
+   * Reconstruct post-increment/decrement expressions from decomposed patterns.
+   *
+   * Bytecode for post-increment used as an expression (e.g., while(x-- > 0)):
+   *   temp = x; x = x - 1; ...use temp...
+   *
+   * After findPPandMM converts x = x - 1 to --x (MMI), we have:
+   *   temp = x; --x; ...use temp...
+   *
+   * This method detects that pattern and converts it to:
+   *   temp = x--; ...use temp...
+   *
+   * The assignment temp = x-- can then be further inlined by StackVarsProcessor.
+   * Only applies in RTF mode.
+   */
+  public boolean reconstructPostIncrement(RootStatement root) {
+    if (!DecompilerContext.isRoundtripFidelity()) {
+      return false;
+    }
+
+    FlattenStatementsHelper flatthelper = new FlattenStatementsHelper();
+    DirectGraph graph = flatthelper.buildDirectGraph(root);
+
+    LinkedList<DirectNode> stack = new LinkedList<>();
+    stack.add(graph.first);
+
+    Set<DirectNode> setVisited = new HashSet<>();
+    boolean res = false;
+
+    while (!stack.isEmpty()) {
+      DirectNode node = stack.removeFirst();
+
+      if (setVisited.contains(node)) {
+        continue;
+      }
+      setVisited.add(node);
+
+      res |= reconstructPostIncrementInList(node.exprents);
+
+      for (DirectEdge suc : node.getSuccessors(DirectEdgeType.REGULAR)) {
+        stack.add(suc.getDestination());
+      }
+    }
+
+    return res;
+  }
+
+  /**
+   * Within a single exprent list, find consecutive pairs:
+   *   [i]   temp = var          (assignment: VarExprent = VarExprent)
+   *   [i+1] ++var or --var      (PPI or MMI, operand matches var)
+   *
+   * Transform to:
+   *   [i]   temp = var++ or temp = var--   (IPP or IMM as expression)
+   *   Remove [i+1]
+   */
+  private boolean reconstructPostIncrementInList(List<Exprent> lst) {
+    boolean result = false;
+
+    for (int i = 0; i < lst.size() - 1; i++) {
+      Exprent first = lst.get(i);
+      Exprent second = lst.get(i + 1);
+
+      // Second must be PPI (++var) or MMI (--var)
+      if (!(second instanceof FunctionExprent)) {
+        continue;
+      }
+      FunctionExprent ppFunc = (FunctionExprent) second;
+      if (ppFunc.getFuncType() != FunctionExprent.FunctionType.PPI
+          && ppFunc.getFuncType() != FunctionExprent.FunctionType.MMI) {
+        continue;
+      }
+
+      Exprent ppOperand = ppFunc.getLstOperands().get(0);
+      if (!(ppOperand instanceof VarExprent)) {
+        continue;
+      }
+      VarExprent ppVar = (VarExprent) ppOperand;
+
+      // First must be an assignment: temp = var
+      if (!(first instanceof AssignmentExprent)) {
+        continue;
+      }
+      AssignmentExprent assign = (AssignmentExprent) first;
+      if (assign.getCondType() != null) {
+        continue;
+      }
+      if (!(assign.getLeft() instanceof VarExprent)) {
+        continue;
+      }
+      if (!(assign.getRight() instanceof VarExprent)) {
+        continue;
+      }
+
+      VarExprent tempVar = (VarExprent) assign.getLeft();
+      VarExprent savedVar = (VarExprent) assign.getRight();
+
+      // The saved var and the PPI operand must refer to the same original variable
+      if (!varsEqual(savedVar, ppVar)) {
+        continue;
+      }
+
+      // Convert PPI to IPP (post-increment) or MMI to IMM (post-decrement)
+      FunctionExprent.FunctionType postType =
+          ppFunc.getFuncType() == FunctionExprent.FunctionType.PPI
+              ? FunctionExprent.FunctionType.IPP
+              : FunctionExprent.FunctionType.IMM;
+
+      FunctionExprent postIncrement = new FunctionExprent(postType, ppVar, ppFunc.bytecode);
+      postIncrement.setImplicitType(ppFunc.getExprType());
+
+      // Replace the assignment's right side with the post-increment
+      assign.setRight(postIncrement);
+      postIncrement.addBytecodeOffsets(savedVar.bytecode);
+
+      // Remove the standalone PPI/MMI
+      lst.remove(i + 1);
+
+      result = true;
+      // Don't decrement i - we've removed the next element, so i now points to
+      // whatever was after the PPI, and we should check the new pair
+    }
+
+    return result;
   }
 
   private boolean processExprentList(List<Exprent> lst) {

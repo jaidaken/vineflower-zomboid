@@ -6,18 +6,22 @@ import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.collectors.CounterContainer;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
+import org.jetbrains.java.decompiler.modules.decompiler.ClasspathHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.DecHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.AssignmentExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.InvocationExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.TextBuffer;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 
@@ -185,9 +189,17 @@ public class CatchStatement extends Statement {
       // not thrown by the try body.
       if (DecompilerContext.isRoundtripFidelity() && exception_types.size() == 1) {
         String excType = exception_types.get(0);
+        boolean shouldWiden = false;
         if ("java/lang/CloneNotSupportedException".equals(excType)
-            || "java/lang/InterruptedException".equals(excType)
             || "java/lang/ReflectiveOperationException".equals(excType)) {
+          shouldWiden = true;
+        } else if ("java/lang/InterruptedException".equals(excType)) {
+          // Only widen InterruptedException if the try body has no methods that throw it.
+          // When the try body calls Thread.sleep(), Object.wait(), etc., the original
+          // catch type is valid and should be preserved.
+          shouldWiden = !tryBodyCanThrowException(first, "java.lang.InterruptedException");
+        }
+        if (shouldWiden) {
           // Check if another catch clause already handles Exception
           boolean hasExceptionCatch = false;
           for (int j = 0; j < exctstrings.size(); j++) {
@@ -220,6 +232,72 @@ public class CatchStatement extends Statement {
     buf.appendLineSeparator();
 
     return buf;
+  }
+
+  /**
+   * Checks whether any method invocation in the given statement (recursively)
+   * declares the specified exception in its throws clause.
+   * Uses Java reflection to resolve method signatures, which works for JDK
+   * classes like Thread.sleep(), Object.wait(), etc.
+   *
+   * @param statement the statement tree to search (typically the try body)
+   * @param exceptionClassName the fully-qualified exception class name using dots (e.g. "java.lang.InterruptedException")
+   * @return true if at least one method call declares the given exception
+   */
+  private static boolean tryBodyCanThrowException(Statement statement, String exceptionClassName) {
+    Class<?> targetException;
+    try {
+      targetException = Class.forName(exceptionClassName);
+    } catch (ClassNotFoundException e) {
+      return false;
+    }
+
+    // Walk the statement tree iteratively to collect all exprents
+    LinkedList<Statement> stmtQueue = new LinkedList<>();
+    stmtQueue.add(statement);
+
+    while (!stmtQueue.isEmpty()) {
+      Statement stmt = stmtQueue.removeFirst();
+
+      List<Exprent> exprents = stmt.getExprents();
+      if (exprents != null) {
+        for (Exprent expr : exprents) {
+          if (exprContainsThrowingInvocation(expr, targetException)) {
+            return true;
+          }
+        }
+      }
+
+      // Add sub-statements for recursive traversal
+      for (Statement sub : stmt.getStats()) {
+        stmtQueue.add(sub);
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Checks whether the given exprent (or any nested exprent) is an InvocationExprent
+   * whose resolved method declares the target exception type.
+   */
+  private static boolean exprContainsThrowingInvocation(Exprent expr, Class<?> targetException) {
+    // Check this expression and all nested expressions
+    List<Exprent> allExprents = expr.getAllExprents(true, true);
+    for (Exprent e : allExprents) {
+      if (e.type == Exprent.Type.INVOCATION) {
+        InvocationExprent invoc = (InvocationExprent) e;
+        Method method = ClasspathHelper.findMethod(invoc.getClassname(), invoc.getName(), invoc.getDescriptor());
+        if (method != null) {
+          for (Class<?> exc : method.getExceptionTypes()) {
+            if (exc.isAssignableFrom(targetException) || targetException.isAssignableFrom(exc)) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
   }
 
   public List<Object> getSequentialObjects() {

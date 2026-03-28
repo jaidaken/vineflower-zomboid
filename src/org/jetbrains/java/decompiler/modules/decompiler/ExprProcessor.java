@@ -1428,6 +1428,143 @@ public class ExprProcessor implements CodeConstants {
     return false;
   }
 
+  /**
+   * RTF: replace duplicate field reads in if-conditions with the variable that
+   * was assigned from the same field in the head block.
+   *
+   * Detects:
+   *   first block: [..., var = obj.field]
+   *   condition:   ... obj.field ... var ...
+   *
+   * The original bytecode used DUP to share a single field read for both the
+   * variable assignment and the condition comparison. Vineflower splits this into
+   * two separate field reads. This pass replaces the duplicate field read in the
+   * condition with the variable, restoring the original instruction count.
+   *
+   * Walks the entire statement tree recursively.
+   */
+  public static boolean replaceDupFieldReadsInConditions(Statement stat) {
+    boolean changed = false;
+
+    // Process children first (bottom-up)
+    for (Statement child : new ArrayList<>(stat.getStats())) {
+      changed |= replaceDupFieldReadsInConditions(child);
+    }
+
+    if (!(stat instanceof IfStatement ifStat)) {
+      return changed;
+    }
+
+    Statement head = ifStat.getFirst();
+    List<Exprent> headExprents = head.getExprents();
+    if (headExprents == null || headExprents.isEmpty()) {
+      return changed;
+    }
+
+    Exprent condExprent = ifStat.getHeadexprentList().get(0);
+    if (condExprent == null) {
+      return changed;
+    }
+
+    // Check each assignment in the head block (iterate from last to first,
+    // since later assignments are closer to the condition)
+    for (int i = headExprents.size() - 1; i >= 0; i--) {
+      Exprent expr = headExprents.get(i);
+      if (!(expr instanceof AssignmentExprent asn)) continue;
+      if (!(asn.getLeft() instanceof VarExprent varExpr)) continue;
+      if (!(asn.getRight() instanceof FieldExprent fieldExpr)) continue;
+
+      // The field must be an instance field (not static) to match the DUP pattern
+      // Static fields don't use DUP in this pattern
+      if (fieldExpr.isStatic()) continue;
+
+      // Verify the variable is used somewhere in the condition
+      // (otherwise there's no DUP pattern to reconstruct)
+      int varIdx = varExpr.getIndex();
+      if (!containsVarByIndex(condExprent, varIdx)) continue;
+
+      // Check that no statements between this assignment and the condition
+      // could modify the field (conservative: no other exprents after this one
+      // that write to the same field or the same object)
+      boolean safeToReplace = true;
+      for (int j = i + 1; j < headExprents.size(); j++) {
+        Exprent later = headExprents.get(j);
+        // If any later exprent references the same field or could have side effects,
+        // bail out. For safety, check if the later exprent contains a field write
+        // to the same field or an invocation.
+        if (containsFieldWrite(later, fieldExpr) || containsInvocation(later)) {
+          safeToReplace = false;
+          break;
+        }
+      }
+      if (!safeToReplace) continue;
+
+      // Find and replace the matching field expression in the condition.
+      // We need to find the exact FieldExprent instance that equals our fieldExpr.
+      if (replaceFieldWithVarInTree(condExprent, fieldExpr, varExpr)) {
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  /**
+   * Recursively find a FieldExprent in the expression tree that equals the target
+   * field expression, and replace it with a copy of the variable expression.
+   * Returns true if a replacement was made.
+   */
+  private static boolean replaceFieldWithVarInTree(Exprent root, FieldExprent targetField, VarExprent varExpr) {
+    // Check direct children
+    for (Exprent child : root.getAllExprents()) {
+      if (child instanceof FieldExprent fe && fe.equals(targetField) && fe != targetField) {
+        // Create a copy of the var expression for replacement.
+        // Clear the definition flag since this is a use, not a declaration.
+        VarExprent replacement = (VarExprent) varExpr.copy();
+        replacement.setDefinition(false);
+        replacement.addBytecodeOffsets(fe.bytecode);
+        root.replaceExprent(child, replacement);
+        return true;
+      }
+      // Recurse into children
+      if (replaceFieldWithVarInTree(child, targetField, varExpr)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Check if an expression tree contains a field write (assignment) to the same
+   * field as the target.
+   */
+  private static boolean containsFieldWrite(Exprent expr, FieldExprent targetField) {
+    if (expr instanceof AssignmentExprent asn && asn.getLeft() instanceof FieldExprent fe) {
+      if (fe.getName().equals(targetField.getName()) && fe.getClassname().equals(targetField.getClassname())) {
+        return true;
+      }
+    }
+    for (Exprent child : expr.getAllExprents(true)) {
+      if (child instanceof AssignmentExprent asn && asn.getLeft() instanceof FieldExprent fe) {
+        if (fe.getName().equals(targetField.getName()) && fe.getClassname().equals(targetField.getClassname())) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Check if an expression tree contains any method invocation.
+   */
+  private static boolean containsInvocation(Exprent expr) {
+    if (expr instanceof InvocationExprent) return true;
+    for (Exprent child : expr.getAllExprents(true)) {
+      if (child instanceof InvocationExprent) return true;
+    }
+    return false;
+  }
+
   public static boolean endsWithSemicolon(Exprent expr) {
     return !(expr instanceof SwitchHeadExprent ||
              expr instanceof MonitorExprent ||

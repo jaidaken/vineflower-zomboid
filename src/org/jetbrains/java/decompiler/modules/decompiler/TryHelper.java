@@ -1,5 +1,6 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
+import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.struct.StructClass;
@@ -220,6 +221,12 @@ public class TryHelper {
       return findLastStatement(((CatchStatement) stat).getFirst());
     }
 
+    // For try-finally (CatchAllStatement), the last statement in the
+    // try body is the last in the normal execution path.
+    if (stat instanceof CatchAllStatement) {
+      return findLastStatement(((CatchAllStatement) stat).getFirst());
+    }
+
     // For if statements where the if-body returns and the fall-through
     // continues, the last statement is the statement itself (which may
     // have exprents after the if).
@@ -230,6 +237,160 @@ public class TryHelper {
     // For compound statements without exprents (like an if-then without
     // else), return null - we can't safely determine the last expression.
     return null;
+  }
+
+  // Inline temp return variables introduced by try-finally desugaring.
+  //
+  // RTF-only optimization. The bytecode compiler duplicates the finally
+  // block for the normal and exceptional paths.  When the try body ends
+  // with a return, the compiler introduces a temp variable to hold the
+  // return value across the finally handler:
+  //
+  //   Type var = default;
+  //   try { ...; var = value; } finally { cleanup; }
+  //   return var;
+  //
+  // This pass inlines the return back into the try body and removes the
+  // now-dead initialization and trailing return:
+  //
+  //   try { ...; return value; } finally { cleanup; }
+  //
+  public static boolean inlineFinallyReturnVars(Statement stat) {
+    boolean changed = false;
+
+    for (Statement st : new ArrayList<>(stat.getStats())) {
+      if (inlineFinallyReturnVars(st)) {
+        changed = true;
+      }
+    }
+
+    if (stat instanceof SequenceStatement) {
+      List<Statement> stats = stat.getStats();
+      for (int i = 0; i < stats.size() - 1; i++) {
+        Statement curr = stats.get(i);
+        Statement next = stats.get(i + 1);
+
+        // Match: curr is a try-finally (CatchAllStatement with isFinally)
+        // and next is a basic block with a single "return var"
+        if (curr instanceof CatchAllStatement catchAll
+            && catchAll.isFinally()
+            && next instanceof BasicBlockStatement
+            && next.getExprents() != null
+            && next.getExprents().size() == 1
+            && next.getExprents().get(0) instanceof ExitExprent exitExpr
+            && exitExpr.getExitType() == ExitExprent.Type.RETURN
+            && exitExpr.getValue() instanceof VarExprent returnVar) {
+
+          // Find the last basic block in the try body that ends with
+          // an assignment to the same variable
+          Statement tryBody = catchAll.getFirst();
+          Statement lastInBody = findLastStatement(tryBody);
+
+          if (lastInBody == null
+              || lastInBody.getExprents() == null
+              || lastInBody.getExprents().isEmpty()) {
+            continue;
+          }
+
+          List<Exprent> bodyExprents = lastInBody.getExprents();
+          Exprent lastExpr = bodyExprents.get(bodyExprents.size() - 1);
+
+          if (!(lastExpr instanceof AssignmentExprent assignment)
+              || assignment.getCondType() != null
+              || !(assignment.getLeft() instanceof VarExprent assignVar)
+              || !assignVar.equals(returnVar)) {
+            continue;
+          }
+
+          // The variable must not be referenced in the finally handler
+          Statement handler = catchAll.getHandler();
+          if (statementReferencesVar(handler, returnVar)) {
+            continue;
+          }
+
+          // Replace the assignment with a return of the assigned value
+          ExitExprent newReturn = (ExitExprent) exitExpr.copy();
+          newReturn.replaceExprent(newReturn.getValue(), assignment.getRight().copy());
+          bodyExprents.set(bodyExprents.size() - 1, newReturn);
+
+          // Remove the return statement after the try-finally
+          next.getExprents().clear();
+
+          // Remove the initialization of the temp variable before the try,
+          // if the previous statement is a basic block whose last exprent
+          // assigns a default value to the same variable.
+          if (i > 0) {
+            Statement prev = stats.get(i - 1);
+            if (prev instanceof BasicBlockStatement
+                && prev.getExprents() != null
+                && !prev.getExprents().isEmpty()) {
+              List<Exprent> prevExprents = prev.getExprents();
+              Exprent prevLast = prevExprents.get(prevExprents.size() - 1);
+              if (prevLast instanceof AssignmentExprent initAssign
+                  && initAssign.getCondType() == null
+                  && initAssign.getLeft() instanceof VarExprent initVar
+                  && initVar.equals(returnVar)
+                  && isDefaultValue(initAssign.getRight())) {
+                prevExprents.remove(prevExprents.size() - 1);
+              }
+            }
+          }
+
+          changed = true;
+        }
+      }
+    }
+
+    return changed;
+  }
+
+  // Check whether any exprent in the statement tree references the given variable.
+  private static boolean statementReferencesVar(Statement stat, VarExprent var) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (exprContainsVar(expr, var)) {
+          return true;
+        }
+      }
+    }
+
+    for (Statement child : stat.getStats()) {
+      if (statementReferencesVar(child, var)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private static boolean exprContainsVar(Exprent expr, VarExprent var) {
+    if (expr instanceof VarExprent ve && ve.equals(var)) {
+      return true;
+    }
+    for (Exprent child : expr.getAllExprents(true)) {
+      if (child instanceof VarExprent ve && ve.equals(var)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Check whether an expression is a type-appropriate default value
+  // (0, 0L, 0.0f, 0.0, false, null).
+  private static boolean isDefaultValue(Exprent expr) {
+    if (expr instanceof ConstExprent constExpr) {
+      Object value = constExpr.getValue();
+      if (value == null) {
+        return true; // null literal
+      }
+      if (value instanceof Number num) {
+        return num.doubleValue() == 0.0;
+      }
+      if (value instanceof Boolean bool) {
+        return !bool;
+      }
+    }
+    return false;
   }
 
   private static boolean collapseTryRec(Statement stat) {

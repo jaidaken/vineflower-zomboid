@@ -2,10 +2,7 @@
 package org.jetbrains.java.decompiler.modules.decompiler.stats;
 
 import org.jetbrains.java.decompiler.code.CodeConstants;
-import org.jetbrains.java.decompiler.code.Instruction;
-import org.jetbrains.java.decompiler.code.InstructionSequence;
 import org.jetbrains.java.decompiler.code.SwitchInstruction;
-import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
@@ -426,44 +423,26 @@ public class SwitchStatement extends Statement {
     }
 
     if (DecompilerContext.isRoundtripFidelity()) {
-      // RTF: detect enum switches by checking if the instruction before the
-      // switch is iaload (pattern: SwitchMap[enum.ordinal()]).
-      // Enum switches must sort by edge index (case value) to preserve the
-      // $SwitchMap integer-to-enum mapping. Sorting by bytecode offset would
-      // change case order, shifting $SwitchMap assignments for ALL switches
-      // using the same enum in the class.
-      boolean isEnumSwitch = false;
-      InstructionSequence seq = bbstat.getBlock().getSeq();
-      if (seq.length() >= 2) {
-        Instruction beforeSwitch = seq.getInstr(seq.length() - 2);
-        if (beforeSwitch.opcode == CodeConstants.opc_iaload) {
-          isEnumSwitch = true;
-        }
-      }
+      // RTF: sort case bodies by the bytecode destination offset from the
+      // original switch instruction. This preserves the original body order
+      // for ALL switch types (enum, int, string). When javac compiles
+      // a switch, it places case bodies in source declaration order.
+      // Reordering cases in decompiled output changes the tableswitch/
+      // lookupswitch targets in the recompiled bytecode.
+      SwitchInstruction swInstr = (SwitchInstruction) bbstat.getBlock().getLastInstruction();
+      int[] destinations = swInstr.getDestinations();
+      int defaultDest = swInstr.getDefaultDestination();
 
-      if (isEnumSwitch) {
-        // Enum switch: sort by edge index to preserve $SwitchMap integer order
-        for (int i = 0; i < edges.size() - 1; i++) {
-          for (int j = edges.size() - 1; j > i; j--) {
-            if (edges.get(j - 1).get(0) > edges.get(j).get(0)) {
-              edges.set(j, edges.set(j - 1, edges.get(j)));
-              nodes.set(j, nodes.set(j - 1, nodes.get(j)));
-            }
-          }
-        }
-      } else {
-        // Non-enum switch: sort by bytecode offset for physical layout fidelity.
-        for (int i = 0; i < edges.size() - 1; i++) {
-          for (int j = edges.size() - 1; j > i; j--) {
-            int offsetA = nodes.get(j - 1) != null ? nodes.get(j - 1).getStartEndRange().start : Integer.MAX_VALUE;
-            int offsetB = nodes.get(j) != null ? nodes.get(j).getStartEndRange().start : Integer.MAX_VALUE;
-            // Fall back to edge index for nodes with zero offset (dummy statements)
-            if (offsetA <= 0) offsetA = edges.get(j - 1).get(0);
-            if (offsetB <= 0) offsetB = edges.get(j).get(0);
-            if (offsetA > offsetB) {
-              edges.set(j, edges.set(j - 1, edges.get(j)));
-              nodes.set(j, nodes.set(j - 1, nodes.get(j)));
-            }
+      // Build a map from edge index to destination offset.
+      // Edge indices: 1..N map to destinations[0..N-1], default maps to lstSuccs.size().
+      int numSuccs = lstFirstSuccs.size();
+      for (int i = 0; i < edges.size() - 1; i++) {
+        for (int j = edges.size() - 1; j > i; j--) {
+          int destA = getMinDestination(edges.get(j - 1), destinations, defaultDest, numSuccs);
+          int destB = getMinDestination(edges.get(j), destinations, defaultDest, numSuccs);
+          if (destA > destB) {
+            edges.set(j, edges.set(j - 1, edges.get(j)));
+            nodes.set(j, nodes.set(j - 1, nodes.get(j)));
           }
         }
       }
@@ -660,5 +639,32 @@ public class SwitchStatement extends Statement {
     }
 
     this.scopedCaseStatements.add(stat);
+  }
+
+  /**
+   * Returns the minimum bytecode destination offset for a group of edge indices.
+   * Used in RTF mode to sort case bodies by their original bytecode layout.
+   *
+   * @param edgeIndices  the edge indices for this case group
+   * @param destinations the destination offsets from the SwitchInstruction
+   * @param defaultDest  the default branch destination offset
+   * @param numSuccs     the total number of successor edges (default index = numSuccs)
+   */
+  private static int getMinDestination(List<Integer> edgeIndices, int[] destinations, int defaultDest, int numSuccs) {
+    int min = Integer.MAX_VALUE;
+    for (int idx : edgeIndices) {
+      int dest;
+      if (idx == numSuccs) {
+        // Default edge
+        dest = defaultDest;
+      } else {
+        // Non-default: edge index i maps to destinations[i-1]
+        dest = destinations[idx - 1];
+      }
+      if (dest < min) {
+        min = dest;
+      }
+    }
+    return min;
   }
 }

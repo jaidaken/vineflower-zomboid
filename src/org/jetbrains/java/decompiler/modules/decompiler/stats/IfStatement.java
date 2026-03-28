@@ -274,6 +274,73 @@ public class IfStatement extends Statement {
       return buf;
     }
 
+    // RTF: use originalBytecodeType to detect and fix comparison operator mismatches.
+    if (DecompilerContext.isRoundtripFidelity() && !rtfOriginalHadGotoFallthrough
+        && condition instanceof IfExprent) {
+      IfExprent ifExpr = (IfExprent) condition;
+      IfExprent.Type origType = ifExpr.getOriginalBytecodeType();
+      if (origType != null) {
+        FunctionType expectedFT = origType.getNegative().getFunctionType();
+        if (expectedFT != null) {
+          Exprent innerCond = ifExpr.getCondition();
+          FunctionType effectiveFT = rtfGetEffectiveComparisonType(innerCond);
+          if (effectiveFT != null && effectiveFT != expectedFT) {
+            Exprent correctedCond = rtfBuildCorrectedCondition(innerCond, expectedFT);
+            if (correctedCond != null) {
+              if (iftype == IFTYPE_IF && ifstat != null && elsestat == null) {
+                // IFTYPE_IF: use the empty-then trick.
+                // if (correct) {} else { body } preserves semantics because
+                // correct is the negation of current.
+                IfExprent wrapper = (IfExprent) ifExpr.copy();
+                wrapper.setCondition(correctedCond);
+                buf.appendIndent(indent);
+                buf.append(wrapper.toJava(indent));
+                buf.append(" {").appendLineSeparator();
+                buf.appendIndent(indent).append("} else {").appendLineSeparator();
+                buf.append(ExprProcessor.jmpWrapper(ifstat, indent + 1, true));
+                buf.appendIndent(indent).append("}").appendLineSeparator();
+                return buf;
+              } else if (iftype == IFTYPE_IFELSE && ifstat != null && elsestat != null) {
+                // IFTYPE_IFELSE: swap bodies and fix the operator.
+                // if (correct) { elseBody } else { ifBody } preserves semantics.
+                IfExprent wrapper = (IfExprent) ifExpr.copy();
+                wrapper.setCondition(correctedCond);
+                buf.appendIndent(indent);
+                buf.append(wrapper.toJava(indent));
+                buf.append(" {").appendLineSeparator();
+                buf.append(ExprProcessor.jmpWrapper(elsestat, indent + 1, true));
+
+                // Render else branch with the original if-body
+                boolean elseif = false;
+                if (ifstat instanceof IfStatement
+                    && ifstat.varDefinitions.isEmpty()
+                    && (ifstat.getFirst().getExprents() != null && ifstat.getFirst().getExprents().isEmpty())
+                    && !ifstat.isLabeled()
+                    && (ifstat.getSuccessorEdges(STATEDGE_DIRECT_ALL).isEmpty()
+                        || !ifstat.getSuccessorEdges(STATEDGE_DIRECT_ALL).get(0).explicit)) {
+                  buf.appendIndent(indent).append("} else ");
+                  TextBuffer content = ExprProcessor.jmpWrapper(ifstat, indent, false);
+                  content.setStart(TextUtil.getIndentString(indent).length());
+                  buf.append(content);
+                  elseif = true;
+                } else {
+                  TextBuffer content = ExprProcessor.jmpWrapper(ifstat, indent + 1, false);
+                  if (content.length() > 0) {
+                    buf.appendIndent(indent).append("} else {").appendLineSeparator();
+                    buf.append(content);
+                  }
+                }
+                if (!elseif) {
+                  buf.appendIndent(indent).append("}").appendLineSeparator();
+                }
+                return buf;
+              }
+            }
+          }
+        }
+      }
+    }
+
     buf.appendIndent(indent);
     // Condition can be null in early processing stages
     if (condition != null) {
@@ -580,6 +647,92 @@ public class IfStatement extends Statement {
 
     Integer type = (Integer) matchNode.getRuleValue(MatchProperties.STATEMENT_IFTYPE);
     return type == null || this.iftype == type;
+  }
+
+  /**
+   * RTF: extract the effective comparison FunctionType from a condition expression.
+   * Handles direct comparisons (EQ..LE) and BOOL_NOT wrapped comparisons.
+   * Returns null if the condition is not a recognizable simple comparison.
+   */
+  private static FunctionType rtfGetEffectiveComparisonType(Exprent cond) {
+    if (!(cond instanceof FunctionExprent)) {
+      return null;
+    }
+    FunctionExprent func = (FunctionExprent) cond;
+    FunctionType ft = func.getFuncType();
+
+    // Direct comparison (EQ, NE, LT, GE, GT, LE)
+    if (ft.ordinal() >= FunctionType.EQ.ordinal()
+        && ft.ordinal() <= FunctionType.LE.ordinal()) {
+      return ft;
+    }
+
+    // BOOL_NOT wrapping a comparison: !(a == b) effectively is NE
+    if (ft == FunctionType.BOOL_NOT && func.getLstOperands().size() == 1) {
+      Exprent inner = func.getLstOperands().get(0);
+      if (inner instanceof FunctionExprent) {
+        FunctionType innerFt = ((FunctionExprent) inner).getFuncType();
+        if (innerFt.ordinal() >= FunctionType.EQ.ordinal()
+            && innerFt.ordinal() <= FunctionType.LE.ordinal()) {
+          // The effective type is the negation of the inner comparison.
+          // Use IfExprent.Type mapping to get the negation.
+          IfExprent.Type mapped = rtfFunctionTypeToIfType(innerFt);
+          if (mapped != null) {
+            return mapped.getNegative().getFunctionType();
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * RTF: build a corrected condition expression that uses the expected FunctionType.
+   * For direct comparisons, replaces the operator. For BOOL_NOT wrapped comparisons,
+   * unwraps and adjusts the inner operator.
+   * Returns null if the condition cannot be corrected.
+   */
+  private static Exprent rtfBuildCorrectedCondition(Exprent cond, FunctionType expectedFT) {
+    if (!(cond instanceof FunctionExprent)) {
+      return null;
+    }
+    FunctionExprent func = (FunctionExprent) cond;
+    FunctionType ft = func.getFuncType();
+
+    // Direct comparison: just swap the operator
+    if (ft.ordinal() >= FunctionType.EQ.ordinal()
+        && ft.ordinal() <= FunctionType.LE.ordinal()) {
+      return new FunctionExprent(expectedFT, func.getLstOperands(), func.bytecode);
+    }
+
+    // BOOL_NOT wrapping a comparison: build a direct comparison with the expected operator
+    if (ft == FunctionType.BOOL_NOT && func.getLstOperands().size() == 1) {
+      Exprent inner = func.getLstOperands().get(0);
+      if (inner instanceof FunctionExprent) {
+        FunctionExprent innerFunc = (FunctionExprent) inner;
+        FunctionType innerFt = innerFunc.getFuncType();
+        if (innerFt.ordinal() >= FunctionType.EQ.ordinal()
+            && innerFt.ordinal() <= FunctionType.LE.ordinal()) {
+          return new FunctionExprent(expectedFT, innerFunc.getLstOperands(), innerFunc.bytecode);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /** Map a FunctionType comparison operator to the corresponding IfExprent.Type for negation lookup. */
+  private static IfExprent.Type rtfFunctionTypeToIfType(FunctionType ft) {
+    switch (ft) {
+      case EQ: return IfExprent.Type.EQ;
+      case NE: return IfExprent.Type.NE;
+      case LT: return IfExprent.Type.LT;
+      case GE: return IfExprent.Type.GE;
+      case GT: return IfExprent.Type.GT;
+      case LE: return IfExprent.Type.LE;
+      default: return null;
+    }
   }
 
   public void fixIfInvariantEmptyElseBranch() {

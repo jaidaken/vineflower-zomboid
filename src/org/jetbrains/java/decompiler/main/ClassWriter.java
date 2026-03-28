@@ -470,7 +470,52 @@ public class ClassWriter implements StatementWriter {
         }
       }
 
-      for (StructField fd : cl.getFields()) {
+      // RTF: reorder static fields with initializers to match <clinit> execution order.
+      // Java compilers initialize static fields in declaration order, so the field
+      // declaration order must match the original <clinit> to produce identical bytecode.
+      List<StructField> fieldList = cl.getFields();
+      if (DecompilerContext.isRoundtripFidelity()) {
+        VBStyleCollection<Exprent, String> staticInits = wrapper.getStaticFieldInitializers();
+        List<String> clinitOrder = staticInits.getLstKeys();
+        if (!clinitOrder.isEmpty()) {
+          // Identify which fields are static with inlined initializers
+          Set<String> reorderableKeys = new LinkedHashSet<>(clinitOrder);
+
+          // Collect reorderable fields sorted by <clinit> order
+          Map<String, StructField> fieldByKey = new LinkedHashMap<>();
+          for (StructField fd : fieldList) {
+            String key = InterpreterUtil.makeUniqueKey(fd.getName(), fd.getDescriptor());
+            if (fd.hasModifier(CodeConstants.ACC_STATIC) && reorderableKeys.contains(key)) {
+              fieldByKey.put(key, fd);
+            }
+          }
+
+          // Build queue of fields in <clinit> order
+          Queue<StructField> orderedQueue = new ArrayDeque<>();
+          for (String key : clinitOrder) {
+            StructField sf = fieldByKey.get(key);
+            if (sf != null) {
+              orderedQueue.add(sf);
+            }
+          }
+
+          // Rebuild field list: replace reorderable slots with <clinit>-ordered fields
+          if (orderedQueue.size() > 1) {
+            List<StructField> reordered = new ArrayList<>(fieldList.size());
+            for (StructField fd : fieldList) {
+              String key = InterpreterUtil.makeUniqueKey(fd.getName(), fd.getDescriptor());
+              if (fd.hasModifier(CodeConstants.ACC_STATIC) && reorderableKeys.contains(key)) {
+                reordered.add(orderedQueue.poll());
+              } else {
+                reordered.add(fd);
+              }
+            }
+            fieldList = reordered;
+          }
+        }
+      }
+
+      for (StructField fd : fieldList) {
         boolean isSyntheticHide = fd.isSynthetic() && DecompilerContext.getOption(IFernflowerPreferences.REMOVE_SYNTHETIC);
         // RTF: don't hide $assertionsDisabled — needed for explicit assertion checks
         if (isSyntheticHide && DecompilerContext.isRoundtripFidelity() && "$assertionsDisabled".equals(fd.getName())) {

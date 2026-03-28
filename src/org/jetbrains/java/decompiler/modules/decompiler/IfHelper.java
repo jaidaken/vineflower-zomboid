@@ -4,10 +4,12 @@ package org.jetbrains.java.decompiler.modules.decompiler;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
 import org.jetbrains.java.decompiler.modules.decompiler.IfNode.EdgeType;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.IfExprent;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.BasicBlockStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement;
@@ -259,6 +261,49 @@ public final class IfHelper {
     return false;
   }
 
+  /**
+   * Checks whether an if-statement's if-body is a guard clause (terminates via return or throw).
+   * A guard clause is a simple block whose last exprent is an ExitExprent (return/throw),
+   * or whose if-edge is a break/continue. In RTF mode, these should be preserved as-is
+   * rather than being merged or swapped into if-else blocks.
+   */
+  private static boolean isRtfGuardClause(IfStatement ifstat) {
+    if (!DecompilerContext.isRoundtripFidelity()) {
+      return false;
+    }
+
+    // Only applies to simple if (no else)
+    if (ifstat.iftype == IfStatement.IFTYPE_IFELSE) {
+      return false;
+    }
+
+    Statement ifbody = ifstat.getIfstat();
+    if (ifbody != null) {
+      // If-body is an inline statement - check if it ends with return/throw
+      if (ifbody instanceof BasicBlockStatement) {
+        List<Exprent> exprents = ifbody.getExprents();
+        if (exprents != null && !exprents.isEmpty()) {
+          Exprent last = exprents.get(exprents.size() - 1);
+          if (last instanceof ExitExprent) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    // If-body is null (goto-style), check the if-edge type
+    StatEdge ifedge = ifstat.getIfEdge();
+    if (ifedge != null) {
+      int edgeType = ifedge.getType();
+      if (edgeType == StatEdge.TYPE_BREAK || edgeType == StatEdge.TYPE_CONTINUE) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   private static boolean collapseElse(IfNode rtnode) {
     if (rtnode.successorType == EdgeType.DIRECT) {
       IfNode elsebranch = rtnode.successorNode;
@@ -299,6 +344,14 @@ public final class IfHelper {
           // A // or goto A
 
           IfStatement firstif = (IfStatement) rtnode.value;
+
+          // RTF: path 2 wraps the first condition in BOOL_NOT, which inverts the
+          // branch opcode polarity. The per-IfStatement rtfConditionFlipped flag
+          // cannot represent sub-expression polarity in the merged compound condition.
+          // Block the merge to preserve the original branch directions.
+          if (path == 2 && DecompilerContext.isRoundtripFidelity()) {
+            return false;
+          }
           IfStatement secondif = (IfStatement) elsebranch.value;
           Statement parent = firstif.getParent();
 
@@ -362,6 +415,13 @@ public final class IfHelper {
           // goto A;
 
           IfStatement firstif = (IfStatement) rtnode.value;
+
+          // RTF: preserve guard clauses - don't absorb the next statement into
+          // a negated if-body when the original if-body terminates (return/throw)
+          if (isRtfGuardClause(firstif)) {
+            return false;
+          }
+
           Statement second = elsebranch.value;
 
           firstif.removeAllSuccessors(second);
@@ -692,6 +752,15 @@ public final class IfHelper {
 
       ifstat.iftype = IfStatement.IFTYPE_IFELSE;
     } else if (ifdirect && (!elsedirect || (noifstat && !noelsestat)) && !ifstat.getAllSuccessorEdges().isEmpty()) {  // if - then
+      // RTF: preserve guard clauses - when the if-body terminates (return/throw) and
+      // would be extracted from the if-statement, skip the reorder to keep the original
+      // branch opcode. Only block the noelsestat=true path where the if-body extraction
+      // is the sole structural change. The !noelsestat (swapBranches) path cannot be
+      // safely blocked without causing type inference failures.
+      if (noelsestat && !noifstat && isRtfGuardClause(ifstat)) {
+        return false;
+      }
+
       // negate the if condition
       IfExprent statexpr = ifstat.getHeadexprent();
       statexpr.setCondition(new FunctionExprent(FunctionType.BOOL_NOT, statexpr.getCondition(), null));

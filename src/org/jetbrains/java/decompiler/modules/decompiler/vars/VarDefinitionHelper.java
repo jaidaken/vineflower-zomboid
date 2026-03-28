@@ -422,12 +422,121 @@ public class VarDefinitionHelper {
     //   sortDeclsByOriginalSlot(root);
     // }
 
+    // RTF: remove dead Object variable declarations that are assigned null and
+    // never used afterward. These produce spurious aconst_null/astore bytecode
+    // instructions that shift subsequent slot indices.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      removeDeadObjectNullDeclarations(root);
+    }
+
     mergeVars(root);
     propogateLVTs(root);
     setNonFinal(root, new HashSet<>());
     remapClashingNames(root, mt);
   }
 
+
+  /**
+   * RTF: remove dead variable declarations of the form "Object var = null;" where
+   * the variable is never read or written after the declaration. These appear when
+   * the original bytecode has aconst_null/astore for a variable whose type can't be
+   * inferred (falls back to Object). Removing them eliminates 2 extra bytecode
+   * instructions per dead declaration, fixing SORTED_MULTISET matches.
+   */
+  private void removeDeadObjectNullDeclarations(Statement stat) {
+    if (stat.getExprents() != null) {
+      Iterator<Exprent> it = stat.getExprents().iterator();
+      while (it.hasNext()) {
+        Exprent expr = it.next();
+        if (isDeadObjectNullDecl(expr, stat)) {
+          it.remove();
+        }
+      }
+    }
+    // Also check varDefinitions list
+    Iterator<Exprent> vdIt = stat.getVarDefinitions().iterator();
+    while (vdIt.hasNext()) {
+      Exprent expr = vdIt.next();
+      if (isDeadObjectNullDecl(expr, stat)) {
+        vdIt.remove();
+      }
+    }
+    for (Statement child : stat.getStats()) {
+      removeDeadObjectNullDeclarations(child);
+    }
+  }
+
+  /**
+   * Check if an expression is a dead "Object var = null" declaration.
+   * Returns true if:
+   * 1. It's an AssignmentExprent with a VarExprent definition on the left
+   * 2. The variable type is java/lang/Object (non-array)
+   * 3. The right side is a null constant
+   * 4. The variable is never referenced (read or written) elsewhere in the method
+   */
+  private boolean isDeadObjectNullDecl(Exprent expr, Statement containingStat) {
+    if (!(expr instanceof AssignmentExprent)) return false;
+    AssignmentExprent assign = (AssignmentExprent) expr;
+    Exprent left = assign.getLeft();
+    if (!(left instanceof VarExprent)) return false;
+    VarExprent var = (VarExprent) left;
+    if (!var.isDefinition()) return false;
+
+    // Must be Object type (not array)
+    VarType vt = var.getVarType();
+    if (vt == null || !"java/lang/Object".equals(vt.value) || vt.arrayDim != 0) return false;
+
+    // Right side must be null constant
+    Exprent right = assign.getRight();
+    if (!(right instanceof ConstExprent)) return false;
+    ConstExprent constRight = (ConstExprent) right;
+    if (constRight.getConstType() != VarType.VARTYPE_NULL) return false;
+
+    // Check that the variable is never referenced anywhere else in the method
+    int varIndex = var.getIndex();
+    return !isVariableReferencedElsewhere(root, varIndex, expr);
+  }
+
+  /**
+   * Check if a variable is referenced (read or assigned) anywhere in the
+   * statement tree, excluding the given expression (the declaration itself).
+   */
+  private static boolean isVariableReferencedElsewhere(Statement stat, int varIndex, Exprent excludeExpr) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (expr == excludeExpr) continue;
+        if (exprReferencesVar(expr, varIndex)) return true;
+      }
+    }
+    for (Exprent expr : stat.getVarDefinitions()) {
+      if (expr == excludeExpr) continue;
+      if (exprReferencesVar(expr, varIndex)) return true;
+    }
+    if (stat instanceof DoStatement) {
+      DoStatement doStat = (DoStatement) stat;
+      Exprent init = doStat.getInitExprent();
+      if (init != null && init != excludeExpr && exprReferencesVar(init, varIndex)) return true;
+      Exprent cond = doStat.getConditionExprent();
+      if (cond != null && cond != excludeExpr && exprReferencesVar(cond, varIndex)) return true;
+      Exprent inc = doStat.getIncExprent();
+      if (inc != null && inc != excludeExpr && exprReferencesVar(inc, varIndex)) return true;
+    }
+    for (Statement child : stat.getStats()) {
+      if (isVariableReferencedElsewhere(child, varIndex, excludeExpr)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Check if any VarExprent in the expression tree references the given variable index.
+   */
+  private static boolean exprReferencesVar(Exprent expr, int varIndex) {
+    if (expr instanceof VarExprent && ((VarExprent) expr).getIndex() == varIndex) return true;
+    for (Exprent sub : expr.getAllExprents(true)) {
+      if (sub instanceof VarExprent && ((VarExprent) sub).getIndex() == varIndex) return true;
+    }
+    return false;
+  }
 
   /**
    * RTF: sort variable declarations by original bytecode slot order.
@@ -561,11 +670,49 @@ public class VarDefinitionHelper {
    * from the definition point. Returns true if null-init is needed.
    */
   private boolean isUsedBeforeAssigned(Statement defStat, int varIndex, Statement firstBlock) {
+    // If the variable is never read anywhere in the statement tree, no init is
+    // needed. This handles dead variables (e.g., Object var = null; that are
+    // never referenced after declaration). Without init, the bare declaration
+    // produces no bytecode, avoiding spurious aconst_null/astore instructions.
+    if (!isVariableEverRead(defStat, varIndex)) {
+      return false;
+    }
     // The definition will be placed in firstBlock (or defStat). We need to check
     // the code AFTER the definition point. Since the definition is placed before
     // any use of the variable, the relevant code is the rest of the statement tree
     // from the definition's parent downward.
     return !isDefinitelyAssigned(defStat, varIndex);
+  }
+
+  /**
+   * RTF: check if a variable is ever read (not just assigned) anywhere in the
+   * statement tree. Returns false for dead variables that are declared but never
+   * used after their initial assignment.
+   */
+  private static boolean isVariableEverRead(Statement stat, int varIndex) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        if (exprReadsVar(expr, varIndex)) {
+          return true;
+        }
+      }
+    }
+    // Check loop init/condition/increment expressions
+    if (stat instanceof DoStatement) {
+      DoStatement doStat = (DoStatement) stat;
+      Exprent init = doStat.getInitExprent();
+      if (init != null && exprReadsVar(init, varIndex)) return true;
+      Exprent cond = doStat.getConditionExprent();
+      if (cond != null && exprReadsVar(cond, varIndex)) return true;
+      Exprent inc = doStat.getIncExprent();
+      if (inc != null && exprReadsVar(inc, varIndex)) return true;
+    }
+    for (Statement child : stat.getStats()) {
+      if (isVariableEverRead(child, varIndex)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -674,6 +821,15 @@ public class VarDefinitionHelper {
     // is handled by the RTF DoStatement fix in the definition placement code.
     if (stat.type == Statement.StatementType.DO) {
       DoStatement doStat = (DoStatement) stat;
+      if (doStat.getLooptype() == DoStatement.Type.FOR) {
+        // For-loop init always executes exactly once before the condition check.
+        // If it assigns the variable (without reading it first), the variable
+        // is definitely assigned after this point.
+        Exprent init = doStat.getInitExprent();
+        if (init != null && !exprReadsVar(init, varIndex) && exprAssignsVarDeep(init, varIndex)) {
+          return true;
+        }
+      }
       if (doStat.getLooptype() == DoStatement.Type.WHILE
           || doStat.getLooptype() == DoStatement.Type.FOR) {
         Exprent cond = doStat.getConditionExprent();
@@ -792,6 +948,17 @@ public class VarDefinitionHelper {
         // Check assignments including nested ones (e.g. foo(x, var = expr))
         if (exprAssignsVarDeep(expr, varIndex)) return true;
       }
+    }
+    // For DoStatements (loops), also check the init/condition/inc expressions
+    // which are not part of getExprents() or getStats() but can reference variables.
+    if (stat instanceof DoStatement) {
+      DoStatement doStat = (DoStatement) stat;
+      Exprent init = doStat.getInitExprent();
+      if (init != null && (exprReadsVar(init, varIndex) || exprAssignsVarDeep(init, varIndex))) return true;
+      Exprent cond = doStat.getConditionExprent();
+      if (cond != null && (exprReadsVar(cond, varIndex) || exprAssignsVarDeep(cond, varIndex))) return true;
+      Exprent inc = doStat.getIncExprent();
+      if (inc != null && (exprReadsVar(inc, varIndex) || exprAssignsVarDeep(inc, varIndex))) return true;
     }
     for (Statement child : stat.getStats()) {
       if (containsVar(child, varIndex)) return true;
