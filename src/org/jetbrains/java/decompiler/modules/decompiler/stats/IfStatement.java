@@ -294,9 +294,18 @@ public class IfStatement extends Statement {
           return buf;
         }
       }
-      // Simple condition: negate the whole condition for the empty-if form
+      // Simple condition: negate the whole condition for the empty-if form.
+      // The empty-if trick is needed to reproduce the original goto at the end
+      // of the fall-through body: if(!cond){} else{body} makes javac emit
+      // ifXX ELSE; goto END; ELSE: body; END: (the 2-instruction pattern).
       IfExprent negated = (IfExprent) ifExpr.copy();
       negated.negateIf();
+      // Simplify double-negation (e.g. !(!x) -> x) so the condition operator
+      // matches what javac needs to emit the correct bytecode opcode.
+      Exprent simplifiedCond = SecondaryFunctionsHelper.propagateBoolNot(negated.getCondition());
+      if (simplifiedCond != null) {
+        negated.setCondition(simplifiedCond);
+      }
       buf.appendIndent(indent);
       buf.append(negated.toJava(indent));
       buf.append(" {").appendLineSeparator();
@@ -922,4 +931,5 @@ public class IfStatement extends Statement {
       this.toggleRtfConditionFlipped();
     }
   }
+
 }
