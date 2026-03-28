@@ -4,9 +4,11 @@ package org.jetbrains.java.decompiler.modules.decompiler;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
 import org.jetbrains.java.decompiler.modules.decompiler.IfNode.EdgeType;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.ConstExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.InvocationExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.IfExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.BasicBlockStatement;
@@ -268,14 +270,18 @@ public final class IfHelper {
    * rather than being merged or swapped into if-else blocks.
    */
   private static boolean isRtfGuardClause(IfStatement ifstat) {
-    // Disabled: caused PlayerDBHelper.isPlayerAlive CORE_OPS_ONLY regression
-    // by preventing if-merging that TWR reconstruction depends on. Only +7 EXACT.
-    if (true || !DecompilerContext.isRoundtripFidelity()) {
+    if (!DecompilerContext.isRoundtripFidelity()) {
       return false;
     }
 
     // Only applies to simple if (no else)
     if (ifstat.iftype == IfStatement.IFTYPE_IFELSE) {
+      return false;
+    }
+
+    // Skip null-check-then-close patterns used by try-with-resources.
+    // These must remain mergeable so TryWithResourcesProcessor can recognize them.
+    if (isNullCheckClosePattern(ifstat)) {
       return false;
     }
 
@@ -303,6 +309,82 @@ public final class IfHelper {
       }
     }
 
+    return false;
+  }
+
+  /**
+   * Detect null-check-then-close patterns from try-with-resources:
+   * if (resource != null) { resource.close(); }
+   */
+  private static boolean isNullCheckClosePattern(IfStatement ifstat) {
+    // Check if the condition is a null check (ifnull/ifnonnull)
+    Exprent headExpr = ifstat.getHeadexprent();
+    if (!(headExpr instanceof IfExprent)) {
+      return false;
+    }
+    IfExprent ifExpr = (IfExprent) headExpr;
+    Exprent cond = ifExpr.getCondition();
+
+    // Must be a null comparison: var != null or var == null
+    boolean isNullCheck = false;
+    if (cond instanceof FunctionExprent) {
+      FunctionExprent func = (FunctionExprent) cond;
+      FunctionType ftype = func.getFuncType();
+      if (ftype == FunctionType.EQ || ftype == FunctionType.NE) {
+        List<Exprent> operands = func.getLstOperands();
+        if (operands.size() == 2) {
+          isNullCheck = (operands.get(0) instanceof ConstExprent && ((ConstExprent) operands.get(0)).getValue() == null)
+              || (operands.get(1) instanceof ConstExprent && ((ConstExprent) operands.get(1)).getValue() == null);
+        }
+      }
+    }
+    if (!isNullCheck) {
+      return false;
+    }
+
+    // Check if the body or a nearby sibling contains a .close() call
+    Statement ifbody = ifstat.getIfstat();
+    if (containsCloseCall(ifbody)) {
+      return true;
+    }
+
+    // When if-body is null (goto-style), check the next sibling in parent sequence
+    Statement parent = ifstat.getParent();
+    if (parent instanceof SequenceStatement) {
+      List<Statement> stats = parent.getStats();
+      for (int i = 0; i < stats.size() - 1; i++) {
+        if (stats.get(i) == ifstat) {
+          if (containsCloseCall(stats.get(i + 1))) {
+            return true;
+          }
+          break;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  private static boolean containsCloseCall(Statement stat) {
+    if (stat == null) {
+      return false;
+    }
+    if (stat instanceof BasicBlockStatement) {
+      List<Exprent> exprents = stat.getExprents();
+      if (exprents != null) {
+        for (Exprent expr : exprents) {
+          if (expr instanceof InvocationExprent) {
+            if ("close".equals(((InvocationExprent) expr).getName())) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    // Check first child for sequences
+    if (!stat.getStats().isEmpty()) {
+      return containsCloseCall(stat.getStats().get(0));
+    }
     return false;
   }
 
