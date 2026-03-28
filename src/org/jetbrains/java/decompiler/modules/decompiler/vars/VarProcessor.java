@@ -36,6 +36,22 @@ public class VarProcessor {
   private final Map<VarVersionPair, Pair<String, VarVersionPair>> varSources = new HashMap<>();
   public boolean nestedProcessed;
 
+  // Per-lambda name overrides, active only during rendering of a specific lambda
+  // that shares this method's synthetic body with another lambda.
+  private @Nullable Map<VarVersionPair, String> activeNameOverrides;
+
+  public void pushNameOverrides(Map<VarVersionPair, String> overrides) {
+    this.activeNameOverrides = overrides;
+  }
+
+  public void popNameOverrides() {
+    this.activeNameOverrides = null;
+  }
+
+  public @Nullable String getNameOverride(VarVersionPair pair) {
+    return activeNameOverrides != null ? activeNameOverrides.get(pair) : null;
+  }
+
   public VarProcessor(StructMethod mt, MethodDescriptor md) {
     method = mt;
     methodDescriptor = md;

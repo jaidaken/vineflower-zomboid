@@ -616,6 +616,15 @@ public class VarExprent extends Exprent implements Pattern {
     VarVersionPair pair = getVarVersionPair();
     if (!FORCE_VARVER_NAME) {
 
+      // Per-lambda name overrides take highest priority: when multiple lambdas share
+      // a synthetic method, each lambda's captured variables have different names.
+      if (this.processor != null) {
+        String nameOverride = this.processor.getNameOverride(pair);
+        if (nameOverride != null) {
+          return nameOverride;
+        }
+      }
+
       if (this.processor != null) {
         String clashingName = this.processor.getClashingName(pair);
 

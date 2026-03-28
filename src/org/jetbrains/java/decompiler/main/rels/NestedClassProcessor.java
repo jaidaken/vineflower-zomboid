@@ -123,7 +123,10 @@ public class NestedClassProcessor {
     MethodWrapper method = parent.getWrapper().getMethods().getWithKey(child.lambdaInformation.content_method_key);
     VarProcessor varProc = method.varproc;
     if (varProc.nestedProcessed) {
-      DecompilerContext.getLogger().writeMessage(parent.classStruct.qualifiedName + "." + method + " processed twice", IFernflowerLogger.Severity.WARN);
+      // This lambda shares a synthetic method with another lambda already processed.
+      // Per-invocation captured variable name overrides are computed at render time
+      // in NewExprent.computeLambdaCapturedNames() to handle the case where both lambda
+      // ClassNodes have the same simpleName (shared invokedynamic constant pool entry).
       return;
     }
     MethodWrapper enclosingMethod = parent.getWrapper().getMethods().getWithKey(child.enclosingMethod);
@@ -187,15 +190,22 @@ public class NestedClassProcessor {
       return;
     }
 
+    // When multiple invokedynamic instructions share the same constant pool entry,
+    // they produce lambda ClassNodes with identical simpleNames and matching NewExprents.
+    // Only process the FIRST matching NewExprent for this lambda ClassNode.
+    final boolean[] found = {false};
     enclosingMethod.getOrBuildGraph().iterateExprents(exprent -> {
+      if (found[0]) return 1; // stop iteration after first match
       List<Exprent> lst = exprent.getAllExprents(true);
       lst.add(exprent);
 
       for (Exprent expr : lst) {
+        if (found[0]) break;
         if (expr instanceof NewExprent) {
           NewExprent new_expr = (NewExprent)expr;
 
           if (new_expr.isLambda() && lambda_class_type.equals(new_expr.getNewType())) {
+            found[0] = true;
             InvocationExprent inv_dynamic = new_expr.getConstructor();
 
             int param_index = is_static_lambda_content ? 0 : 1;

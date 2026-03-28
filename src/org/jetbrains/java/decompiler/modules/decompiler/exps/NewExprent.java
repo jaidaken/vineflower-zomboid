@@ -401,7 +401,27 @@ public class NewExprent extends Exprent {
         }
         setLambdaGenericTypes();
         Exprent methodObject = constructor == null ? null : constructor.getInstance();
-        new ClassWriter().classLambdaToJava(child, buf, methodObject, indent);
+
+        // Push per-invocation captured variable name overrides for shared synthetic lambda methods.
+        // When multiple invokedynamic instructions share the same synthetic method, each captures
+        // different variables. Compute the correct names from THIS invocation's constructor params.
+        MethodWrapper contentMethod = child.getWrapper() != null
+            ? child.getWrapper().getMethods().getWithKey(child.lambdaInformation.content_method_key) : null;
+        boolean pushedOverrides = false;
+        if (contentMethod != null && contentMethod.varproc.nestedProcessed && constructor != null) {
+          Map<VarVersionPair, String> overrides = computeLambdaCapturedNames(child, constructor);
+          if (overrides != null) {
+            contentMethod.varproc.pushNameOverrides(overrides);
+            pushedOverrides = true;
+          }
+        }
+        try {
+          new ClassWriter().classLambdaToJava(child, buf, methodObject, indent);
+        } finally {
+          if (pushedOverrides) {
+            contentMethod.varproc.popNameOverrides();
+          }
+        }
       }
       else if (!selfReference) {
         new ClassWriter().writeClass(child, buf, indent);
@@ -833,6 +853,39 @@ public class NewExprent extends Exprent {
 
   public boolean isLambda() {
     return lambda;
+  }
+
+  /**
+   * Compute captured variable name overrides for this specific lambda invocation.
+   * When multiple invokedynamic instructions share the same synthetic method, each captures
+   * different variables. This reads the captured variable names from this invocation's
+   * constructor parameters and maps them to the content method's variable indices.
+   */
+  private static Map<VarVersionPair, String> computeLambdaCapturedNames(ClassNode child, InvocationExprent constructor) {
+    if (child.lambdaInformation.is_method_reference) return null;
+
+    MethodDescriptor md_lambda = MethodDescriptor.parseDescriptor(child.lambdaInformation.method_descriptor);
+    MethodDescriptor md_content = MethodDescriptor.parseDescriptor(child.lambdaInformation.content_method_descriptor);
+    int vars_count = md_content.params.length - md_lambda.params.length;
+    if (vars_count <= 0) return null; // no captured variables
+
+    boolean is_static = child.lambdaInformation.is_content_method_static;
+    int param_index = is_static ? 0 : 1;
+    int varIndex = is_static ? 0 : 1;
+
+    Map<VarVersionPair, String> overrides = new HashMap<>();
+    for (int i = 0; i < md_content.params.length; ++i) {
+      VarVersionPair varVersion = new VarVersionPair(varIndex, 0);
+      if (i < vars_count) {
+        Exprent param = constructor.getLstParameters().get(param_index + i);
+        if (param instanceof VarExprent) {
+          overrides.put(varVersion, ((VarExprent) param).getName());
+        }
+      }
+      varIndex += md_content.params[i].stackSize;
+    }
+
+    return overrides.isEmpty() ? null : overrides;
   }
 
   public boolean isAnonymous() {
