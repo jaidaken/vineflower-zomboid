@@ -268,7 +268,9 @@ public final class IfHelper {
    * rather than being merged or swapped into if-else blocks.
    */
   private static boolean isRtfGuardClause(IfStatement ifstat) {
-    if (!DecompilerContext.isRoundtripFidelity()) {
+    // Disabled: caused PlayerDBHelper.isPlayerAlive CORE_OPS_ONLY regression
+    // by preventing if-merging that TWR reconstruction depends on. Only +7 EXACT.
+    if (true || !DecompilerContext.isRoundtripFidelity()) {
       return false;
     }
 

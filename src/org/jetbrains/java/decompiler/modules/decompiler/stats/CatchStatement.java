@@ -194,9 +194,6 @@ public class CatchStatement extends Statement {
             || "java/lang/ReflectiveOperationException".equals(excType)) {
           shouldWiden = true;
         } else if ("java/lang/InterruptedException".equals(excType)) {
-          // Only widen InterruptedException if the try body has no methods that throw it.
-          // When the try body calls Thread.sleep(), Object.wait(), etc., the original
-          // catch type is valid and should be preserved.
           shouldWiden = !tryBodyCanThrowException(first, "java.lang.InterruptedException");
         }
         if (shouldWiden) {
