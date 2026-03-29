@@ -806,53 +806,63 @@ public class MethodProcessor implements Runnable {
     if (ifIndex < 0 || ifIndex >= parentSeq.getStats().size() - 1) return;
     Statement bodySibling = parentSeq.getStats().get(ifIndex + 1);
 
-    // Safety: sibling must have exactly 1 regular predecessor
+    // Safety: immediate sibling must have exactly 1 regular predecessor
     List<StatEdge> sibPreds = bodySibling.getPredecessorEdges(StatEdge.TYPE_REGULAR);
     if (sibPreds.size() != 1) return;
-
-    // Safety: the body sibling must be the LAST statement in the sequence.
-    // If there are more siblings after it, absorbing would break variable scope
-    // (later siblings may reference vars defined before the if).
-    if (ifIndex + 1 != parentSeq.getStats().size() - 1
-        && ifIndex + 1 < parentSeq.getStats().size() - 1) {
-      // There are siblings after the body sibling - skip to avoid scope issues
-      return;
-    }
 
     // Safety: IfStatement must have a successor edge
     List<StatEdge> ifSuccs = ifStat.getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
     if (ifSuccs.isEmpty()) return;
 
-    // === Transform: absorb sibling as if-body, make guard clause the else ===
+    // === Transform: absorb ALL remaining siblings as if-body ===
+    // Following the pattern from reorderIf() in IfHelper.java (lines 800-816):
+    // collect all siblings after the IfStatement and wrap in a SequenceStatement
+    // if there are multiple.
+
+    List<Statement> bodyStatements = new ArrayList<>();
+    for (int j = ifIndex + 1; j < parentSeq.getStats().size(); j++) {
+      bodyStatements.add(parentSeq.getStats().get(j));
+    }
+
+    Statement bodyBlock;
+    if (bodyStatements.size() == 1) {
+      bodyBlock = bodyStatements.get(0);
+    } else {
+      bodyBlock = new SequenceStatement(bodyStatements);
+      bodyBlock.setAllParent();
+    }
 
     // 1. Remove IfStatement's successor edge
     ifStat.removeSuccessor(ifSuccs.get(0));
 
-    // 2. Move sibling's successor edges to the IfStatement
-    for (StatEdge edge : new ArrayList<>(bodySibling.getAllSuccessorEdges())) {
-      bodySibling.removeSuccessor(edge);
+    // 2. Move the LAST body statement's successor edges to the IfStatement
+    Statement lastBody = bodyStatements.get(bodyStatements.size() - 1);
+    for (StatEdge edge : new ArrayList<>(lastBody.getAllSuccessorEdges())) {
+      lastBody.removeSuccessor(edge);
       edge.setSource(ifStat);
       ifStat.addSuccessor(edge);
     }
 
-    // 3. Remove sibling from parent
-    parentSeq.getStats().removeWithKey(bodySibling.id);
+    // 3. Remove all body siblings from parent
+    for (Statement st : bodyStatements) {
+      parentSeq.getStats().removeWithKey(st.id);
+    }
 
     // 4. Old ifedge (first -> guardClause) becomes elseedge
     StatEdge oldIfEdge = ifStat.getIfEdge();
 
-    // 5. New ifedge: first -> bodySibling
-    StatEdge newIfEdge = new StatEdge(StatEdge.TYPE_REGULAR, ifStat.getFirst(), bodySibling);
+    // 5. New ifedge: first -> bodyBlock
+    StatEdge newIfEdge = new StatEdge(StatEdge.TYPE_REGULAR, ifStat.getFirst(), bodyBlock);
     ifStat.getFirst().addSuccessor(newIfEdge);
 
     // 6. Wire up IFTYPE_IFELSE
     ifStat.setElsestat(guardClause);
     ifStat.setElseEdge(oldIfEdge);
-    ifStat.setIfstat(bodySibling);
+    ifStat.setIfstat(bodyBlock);
     ifStat.setIfEdge(newIfEdge);
 
-    ifStat.getStats().addWithKey(bodySibling, bodySibling.id);
-    bodySibling.setParent(ifStat);
+    ifStat.getStats().addWithKey(bodyBlock, bodyBlock.id);
+    bodyBlock.setParent(ifStat);
 
     ifStat.iftype = IfStatement.IFTYPE_IFELSE;
 
