@@ -384,7 +384,12 @@ public class PPandMMHelper {
           }
         }
 
-        // Last exprent
+        // Last exprent: inline standalone PPI/MMI (++var/--var) into if-condition.
+        // RTF: skip this - inlining moves the iinc instruction from BEFORE the
+        // if-condition to INSIDE argument evaluation, changing bytecode order.
+        if (DecompilerContext.isRoundtripFidelity()) {
+          return res;
+        }
         Exprent expr = stat.getExprents().isEmpty() ? null : stat.getExprents().get(stat.getExprents().size() - 1);
         if (expr instanceof FunctionExprent) {
           FunctionExprent func = (FunctionExprent)expr;
