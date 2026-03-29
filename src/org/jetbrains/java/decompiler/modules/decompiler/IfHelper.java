@@ -147,6 +147,13 @@ public final class IfHelper {
           IfStatement ifchild = (IfStatement) ifbranch.value;
           Statement ifinner = ifbranch.innerNode.value;
 
+          // RTF: don't merge nested ifs when the parent has the goto-fallthrough
+          // flag. Merging converts ifXX+goto (2-instruction) into a single
+          // reversed ifYY, changing the bytecode opcode and instruction count.
+          if (DecompilerContext.isRoundtripFidelity() && ifparent.isRtfOriginalHadGotoFallthrough()) {
+            return false;
+          }
+
           if (ifchild.getFirst().getExprents().isEmpty() && !ifchild.hasPPMM()) {
 
             ifparent.getIfEdge().remove();
