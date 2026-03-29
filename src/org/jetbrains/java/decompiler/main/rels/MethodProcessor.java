@@ -590,6 +590,7 @@ public class MethodProcessor implements Runnable {
       fixGuardClauseInversions(root);
       fixGuardClauseLayout(root);
       fixLambdaOrdering(root);
+      reInlineGuardClauses(root);
     }
 
     // RTF: final repair pass for orphaned label edges after all transformations.
@@ -752,6 +753,123 @@ public class MethodProcessor implements Runnable {
   }
 
   /** Check if a statement is a simple terminating block (just return/throw with a constant or simple expression). */
+  /**
+   * RTF: re-inline guard clauses into if-else structures.
+   *
+   * The IfStatement constructor extracts guard clauses (return/throw) as the
+   * ifstat, with the body code becoming a sibling in the parent SequenceStatement.
+   * The rtfOriginalHadGotoFallthrough rendering trick then produces:
+   *   if(!cond){} else{guard_clause};  body_code_sibling;
+   *
+   * This re-inlines by absorbing the body sibling into the IfStatement:
+   *   if(cond){body_code} else{guard_clause}
+   *
+   * This produces the exact original bytecode: correct opcode, correct goto.
+   * Pattern follows reorderIf() in IfHelper.java.
+   */
+  private static void reInlineGuardClauses(Statement stat) {
+    for (Statement child : new ArrayList<>(stat.getStats())) {
+      reInlineGuardClauses(child);
+    }
+
+    if (!(stat instanceof IfStatement)) return;
+    IfStatement ifStat = (IfStatement) stat;
+
+    if (ifStat.iftype != IfStatement.IFTYPE_IF) return;
+    if (!ifStat.isRtfOriginalHadGotoFallthrough()) return;
+
+    // ifstat is the guard clause (return/throw) - must be terminating
+    Statement guardClause = ifStat.getIfstat();
+    if (guardClause == null) return;
+    if (guardClause.getExprents() == null || guardClause.getExprents().isEmpty()) return;
+    Exprent lastExpr = guardClause.getExprents().get(guardClause.getExprents().size() - 1);
+    if (!(lastExpr instanceof ExitExprent)) return;
+
+    // Skip compound conditions - the rendering has special handling
+    IfExprent headExpr = ifStat.getHeadexprent();
+    if (headExpr != null) {
+      Exprent cond = headExpr.getCondition();
+      if (cond instanceof FunctionExprent) {
+        FunctionExprent.FunctionType ft = ((FunctionExprent) cond).getFuncType();
+        if (ft == FunctionExprent.FunctionType.BOOLEAN_AND || ft == FunctionExprent.FunctionType.BOOLEAN_OR) {
+          return;
+        }
+      }
+    }
+
+    // Parent must be a SequenceStatement with a next sibling
+    Statement parent = ifStat.getParent();
+    if (!(parent instanceof SequenceStatement)) return;
+    SequenceStatement parentSeq = (SequenceStatement) parent;
+
+    int ifIndex = parentSeq.getStats().getIndexByKey(ifStat.id);
+    if (ifIndex < 0 || ifIndex >= parentSeq.getStats().size() - 1) return;
+    Statement bodySibling = parentSeq.getStats().get(ifIndex + 1);
+
+    // Safety: sibling must have exactly 1 regular predecessor
+    List<StatEdge> sibPreds = bodySibling.getPredecessorEdges(StatEdge.TYPE_REGULAR);
+    if (sibPreds.size() != 1) return;
+
+    // Safety: the body sibling must be the LAST statement in the sequence.
+    // If there are more siblings after it, absorbing would break variable scope
+    // (later siblings may reference vars defined before the if).
+    if (ifIndex + 1 != parentSeq.getStats().size() - 1
+        && ifIndex + 1 < parentSeq.getStats().size() - 1) {
+      // There are siblings after the body sibling - skip to avoid scope issues
+      return;
+    }
+
+    // Safety: IfStatement must have a successor edge
+    List<StatEdge> ifSuccs = ifStat.getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
+    if (ifSuccs.isEmpty()) return;
+
+    // === Transform: absorb sibling as if-body, make guard clause the else ===
+
+    // 1. Remove IfStatement's successor edge
+    ifStat.removeSuccessor(ifSuccs.get(0));
+
+    // 2. Move sibling's successor edges to the IfStatement
+    for (StatEdge edge : new ArrayList<>(bodySibling.getAllSuccessorEdges())) {
+      bodySibling.removeSuccessor(edge);
+      edge.setSource(ifStat);
+      ifStat.addSuccessor(edge);
+    }
+
+    // 3. Remove sibling from parent
+    parentSeq.getStats().removeWithKey(bodySibling.id);
+
+    // 4. Old ifedge (first -> guardClause) becomes elseedge
+    StatEdge oldIfEdge = ifStat.getIfEdge();
+
+    // 5. New ifedge: first -> bodySibling
+    StatEdge newIfEdge = new StatEdge(StatEdge.TYPE_REGULAR, ifStat.getFirst(), bodySibling);
+    ifStat.getFirst().addSuccessor(newIfEdge);
+
+    // 6. Wire up IFTYPE_IFELSE
+    ifStat.setElsestat(guardClause);
+    ifStat.setElseEdge(oldIfEdge);
+    ifStat.setIfstat(bodySibling);
+    ifStat.setIfEdge(newIfEdge);
+
+    ifStat.getStats().addWithKey(bodySibling, bodySibling.id);
+    bodySibling.setParent(ifStat);
+
+    ifStat.iftype = IfStatement.IFTYPE_IFELSE;
+
+    // 7. Negate condition - the condition was for the guard clause,
+    //    now it needs to be for the body (opposite polarity)
+    IfExprent condExpr = ifStat.getHeadexprent();
+    Exprent negated = new FunctionExprent(
+        FunctionExprent.FunctionType.BOOL_NOT, condExpr.getCondition(), null);
+    Exprent simplified = SecondaryFunctionsHelper.propagateBoolNot(negated);
+    condExpr.setCondition(simplified != null ? simplified : negated);
+
+    // 8. Update RTF tracking
+    ifStat.setNegated(!ifStat.isNegated());
+    ifStat.toggleRtfIfBodyIsFallThrough();
+    ifStat.toggleRtfConditionFlipped();
+  }
+
   private static boolean isSimpleTerminating(Statement stat) {
     // Direct basic block with return/throw
     if (stat.getExprents() != null) {
