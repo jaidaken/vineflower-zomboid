@@ -915,7 +915,14 @@ public class FunctionExprent extends Exprent {
             ((FunctionExprent)expr).getFuncType() == funcType) {
           // Float operations are not assocative!
           if (expr.getExprType() != VarType.VARTYPE_FLOAT && expr.getExprType() != VarType.VARTYPE_DOUBLE) {
-            parentheses = !ASSOCIATIVITY.contains(funcType);
+            // RTF: keep parentheses to preserve original evaluation order.
+            // Without parens, a + (b + c) renders as a + b + c, which javac
+            // left-associates to (a + b) + c - different bytecode.
+            if (DecompilerContext.isRoundtripFidelity()) {
+              parentheses = true;  // always keep parens for same-precedence in RTF
+            } else {
+              parentheses = !ASSOCIATIVITY.contains(funcType);
+            }
           }
         }
       }
