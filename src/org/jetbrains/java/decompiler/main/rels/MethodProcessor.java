@@ -591,6 +591,7 @@ public class MethodProcessor implements Runnable {
       fixGuardClauseLayout(root);
       fixLambdaOrdering(root);
       reInlineGuardClauses(root);
+      restoreIincCompoundAssignments(root);
     }
 
     // RTF: final repair pass for orphaned label edges after all transformations.
@@ -878,6 +879,52 @@ public class MethodProcessor implements Runnable {
     ifStat.setNegated(!ifStat.isNegated());
     ifStat.toggleRtfIfBodyIsFallThrough();
     ifStat.toggleRtfConditionFlipped();
+  }
+
+  /**
+   * RTF: restore compound assignment form for iinc bytecode instructions.
+   * During initial processing, iinc is decompiled as var = var + const.
+   * SSA splitting changes the versions, making compound assignment detection
+   * fail. The rtfIincType tag preserves the original operator so we can
+   * restore var += const after all SSA processing is complete.
+   */
+  private static void restoreIincCompoundAssignments(Statement stat) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        restoreIincInExprent(expr);
+      }
+    }
+    for (Statement child : stat.getStats()) {
+      restoreIincCompoundAssignments(child);
+    }
+  }
+
+  private static void restoreIincInExprent(Exprent expr) {
+    if (expr instanceof AssignmentExprent) {
+      AssignmentExprent assign = (AssignmentExprent) expr;
+      if (assign.getRtfIincType() != null && assign.getCondType() == null) {
+        // This was an iinc instruction. Convert to compound assignment.
+        // The right side is currently: FunctionExprent(ADD/SUB, [var, const])
+        // We need to extract the const and set it as the new right side.
+        Exprent right = assign.getRight();
+        if (right instanceof FunctionExprent) {
+          FunctionExprent func = (FunctionExprent) right;
+          if (func.getLstOperands().size() == 2) {
+            // The const is the second operand (for ADD: var + const)
+            // or first operand if commutative and swapped
+            Exprent constOp = func.getLstOperands().get(1);
+            if (constOp instanceof ConstExprent) {
+              assign.setRight(constOp);
+              assign.setCondType(assign.getRtfIincType());
+            }
+          }
+        }
+      }
+    }
+    // Recurse into sub-expressions
+    for (Exprent child : expr.getAllExprents()) {
+      restoreIincInExprent(child);
+    }
   }
 
   private static boolean isSimpleTerminating(Statement stat) {

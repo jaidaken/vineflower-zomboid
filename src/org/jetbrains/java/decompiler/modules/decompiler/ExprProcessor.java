@@ -390,10 +390,15 @@ public class ExprProcessor implements CodeConstants {
           VarExprent vevar = new VarExprent(instr.operand(0), VarType.VARTYPE_INT, varProcessor, bytecode_offsets);
           vevar.setBackingInstr(instr);
           varProcessor.findLVT(vevar, bytecode_offset + instr.length);
-          exprlist.add(new AssignmentExprent(vevar, new FunctionExprent(
-            instr.operand(1) < 0 ? FunctionType.SUB : FunctionType.ADD, Arrays
+          FunctionType iincFuncType = instr.operand(1) < 0 ? FunctionType.SUB : FunctionType.ADD;
+          AssignmentExprent iincAssign = new AssignmentExprent(vevar, new FunctionExprent(
+            iincFuncType, Arrays
             .asList(vevar.copy(), new ConstExprent(VarType.VARTYPE_INT, Math.abs(instr.operand(1)), null)),
-            bytecode_offsets), bytecode_offsets));
+            bytecode_offsets), bytecode_offsets);
+          // RTF: tag with the iinc operator so post-SSA processing can restore
+          // the compound assignment form (var += const) for bytecode fidelity.
+          iincAssign.setRtfIincType(iincFuncType);
+          exprlist.add(iincAssign);
           break;
         case opc_i2l:
         case opc_i2f:

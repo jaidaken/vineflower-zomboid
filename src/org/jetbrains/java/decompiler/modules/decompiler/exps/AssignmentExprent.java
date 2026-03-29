@@ -36,6 +36,9 @@ public class AssignmentExprent extends Exprent {
   private Exprent left;
   private Exprent right;
   private FunctionExprent.FunctionType condType = null;
+  // RTF: tracks the compound operator from the original iinc instruction.
+  // Set before SSA splitting so it survives index renumbering.
+  private FunctionExprent.FunctionType rtfIincType = null;
 
   public AssignmentExprent(Exprent left, Exprent right, BitSet bytecodeOffsets) {
     super(Type.ASSIGNMENT);
@@ -107,7 +110,9 @@ public class AssignmentExprent extends Exprent {
 
   @Override
   public Exprent copy() {
-    return new AssignmentExprent(left.copy(), right.copy(), condType, bytecode);
+    AssignmentExprent copy = new AssignmentExprent(left.copy(), right.copy(), condType, bytecode);
+    copy.rtfIincType = this.rtfIincType;
+    return copy;
   }
 
   @Override
@@ -587,5 +592,13 @@ public class AssignmentExprent extends Exprent {
 
   public void setCondType(FunctionExprent.FunctionType condType) {
     this.condType = condType;
+  }
+
+  public FunctionExprent.FunctionType getRtfIincType() {
+    return rtfIincType;
+  }
+
+  public void setRtfIincType(FunctionExprent.FunctionType rtfIincType) {
+    this.rtfIincType = rtfIincType;
   }
 }
