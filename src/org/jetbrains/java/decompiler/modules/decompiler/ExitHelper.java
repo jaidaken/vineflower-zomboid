@@ -297,8 +297,11 @@ public final class ExitHelper {
             if (ex.getExitType() == ExitExprent.Type.RETURN && ex.getValue() == null) {
               // RTF: preserve void returns inside guard clause IfStatements where
               // both branches terminate. The 2 returns are needed for byte-exact match.
-              if (DecompilerContext.isRoundtripFidelity() && rtfIsGuardClauseReturn(source)) {
-                continue;
+              if (DecompilerContext.isRoundtripFidelity()) {
+                boolean isGuard = rtfIsGuardClauseReturn(source);
+                if (isGuard) {
+                  continue;
+                }
               }
               // remove redundant return
               dummyExit.addBytecodeOffsets(ex.bytecode);
@@ -324,7 +327,6 @@ public final class ExitHelper {
     Statement parent = source.getParent();
     if (!(parent instanceof IfStatement)) return false;
     IfStatement ifStat = (IfStatement) parent;
-    if (!ifStat.isRtfBothBranchesTerminate()) return false;
     if (ifStat.isRtfOriginalHadGotoFallthrough()) return false;
     if (source != ifStat.getIfstat() && source != ifStat.getElsestat()) return false;
     // Only preserve the GUARD return - a BasicBlock whose only content is the
@@ -333,18 +335,48 @@ public final class ExitHelper {
     if (!(source instanceof BasicBlockStatement)) return false;
     List<Exprent> exprents = source.getExprents();
     if (exprents == null || exprents.size() != 1) return false;
-    // Skip when the IfStatement is nested inside another IfStatement with
-    // rtfBothBranchesTerminate - nested guard clauses cause false positives.
+
+    // Match two cases:
+    // 1. IFTYPE_IFELSE with rtfBothBranchesTerminate (both branches have returns)
+    // 2. IFTYPE_IF where the if-body IS the return (guard clause at method level)
+    // Source must be a return-only guard body (ifstat or elsestat) of the IfStatement.
+    // This covers: IFTYPE_IF with return as if-body, IFTYPE_IFELSE with return as
+    // either body, and cases where reorderIf moved the return to else-body.
+    if (source != ifStat.getIfstat() && source != ifStat.getElsestat()) {
+      // Already checked above, but defensive
+      return false;
+    }
+
+    // Skip when nested inside another IfStatement with rtfBothBranchesTerminate
     Statement ancestor = ifStat.getParent();
     while (ancestor != null) {
       if (ancestor instanceof IfStatement) {
-        IfStatement outerIf = (IfStatement) ancestor;
-        if (outerIf.isRtfBothBranchesTerminate()) {
-          return false; // nested guard clause, don't preserve
+        if (((IfStatement) ancestor).isRtfBothBranchesTerminate()) {
+          return false;
         }
       }
       ancestor = ancestor.getParent();
     }
+
+    // For non-rtfBothBranchesTerminate cases: skip when the IfStatement has
+    // a body AFTER it (it's NOT the last child of its parent). Preserving
+    // the return for early-method guards forces javac to place it at the
+    // method end, adding a goto to skip over it.
+    if (!ifStat.isRtfBothBranchesTerminate()) {
+      Statement ifParent = ifStat.getParent();
+      if (ifParent instanceof SequenceStatement) {
+        SequenceStatement seq = (SequenceStatement) ifParent;
+        int idx = seq.getStats().getIndexByKey(ifStat.id);
+        if (idx >= 0 && idx < seq.getStats().size() - 1) {
+          return false; // not the last child - code follows this guard
+        }
+      } else if (ifParent instanceof RootStatement) {
+        // IfStatement wraps the entire method body - the guard return
+        // at method start is better handled by rtfIsGuardClauseAtMethodEnd
+        return false;
+      }
+    }
+
     return true;
   }
 
