@@ -295,6 +295,11 @@ public final class ExitHelper {
           if (expr instanceof ExitExprent) {
             ExitExprent ex = (ExitExprent) expr;
             if (ex.getExitType() == ExitExprent.Type.RETURN && ex.getValue() == null) {
+              // RTF: preserve void returns inside guard clause IfStatements where
+              // both branches terminate. The 2 returns are needed for byte-exact match.
+              if (DecompilerContext.isRoundtripFidelity() && rtfIsGuardClauseReturn(source)) {
+                continue;
+              }
               // remove redundant return
               dummyExit.addBytecodeOffsets(ex.bytecode);
               lstExpr.remove(lstExpr.size() - 1);
@@ -306,6 +311,41 @@ public final class ExitHelper {
     }
 
     return res;
+  }
+
+  /**
+   * RTF: check if a statement's void return should be preserved because it's
+   * inside a guard clause IfStatement where both branches terminate. Walking
+   * up the parent chain, look for an IfStatement with rtfBothBranchesTerminate
+   * (and not rtfOriginalHadGotoFallthrough, which is handled separately).
+   */
+  private static boolean rtfIsGuardClauseReturn(Statement source) {
+    // Source must be a direct child (ifstat or elsestat) of the IfStatement
+    Statement parent = source.getParent();
+    if (!(parent instanceof IfStatement)) return false;
+    IfStatement ifStat = (IfStatement) parent;
+    if (!ifStat.isRtfBothBranchesTerminate()) return false;
+    if (ifStat.isRtfOriginalHadGotoFallthrough()) return false;
+    if (source != ifStat.getIfstat() && source != ifStat.getElsestat()) return false;
+    // Only preserve the GUARD return - a BasicBlock whose only content is the
+    // void return being stripped. If the body has other code before the return
+    // (it's the code body), let the return be stripped normally.
+    if (!(source instanceof BasicBlockStatement)) return false;
+    List<Exprent> exprents = source.getExprents();
+    if (exprents == null || exprents.size() != 1) return false;
+    // Skip when the IfStatement is nested inside another IfStatement with
+    // rtfBothBranchesTerminate - nested guard clauses cause false positives.
+    Statement ancestor = ifStat.getParent();
+    while (ancestor != null) {
+      if (ancestor instanceof IfStatement) {
+        IfStatement outerIf = (IfStatement) ancestor;
+        if (outerIf.isRtfBothBranchesTerminate()) {
+          return false; // nested guard clause, don't preserve
+        }
+      }
+      ancestor = ancestor.getParent();
+    }
+    return true;
   }
 
   // Fixes chars being returned when ints are required

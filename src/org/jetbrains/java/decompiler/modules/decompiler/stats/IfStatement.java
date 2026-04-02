@@ -62,6 +62,11 @@ public class IfStatement extends Statement {
   // At render time, emit if(inverted){} else{body} to reproduce the pattern.
   private boolean rtfOriginalHadGotoFallthrough = false;
 
+  // RTF: set when both branches of the original if had 0 regular successors
+  // (both terminated with return/throw). Used by restoreGuardClauseReturns to
+  // identify guard clauses where both paths terminate.
+  private boolean rtfBothBranchesTerminate = false;
+
   private final List<Exprent> headexprent = new ArrayList<>(1); // contains IfExprent
 
   // *****************************************************************************
@@ -119,6 +124,9 @@ public class IfStatement extends Statement {
         else {
           if (lstSucc.size() == 0) {
             post = elsestat;
+            if (lstSucc1.size() == 0) {
+              rtfBothBranchesTerminate = true;
+            }
           }
           else if (lstSucc1.size() == 0) {
             post = ifstat;
@@ -611,6 +619,10 @@ public class IfStatement extends Statement {
 
   public boolean isRtfOriginalHadGotoFallthrough() {
     return rtfOriginalHadGotoFallthrough;
+  }
+
+  public boolean isRtfBothBranchesTerminate() {
+    return rtfBothBranchesTerminate;
   }
 
   public boolean isRtfConditionFlipped() {
