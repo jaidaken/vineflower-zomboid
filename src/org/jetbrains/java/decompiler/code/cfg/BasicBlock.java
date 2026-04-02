@@ -20,6 +20,11 @@ public class BasicBlock implements IGraphNode {
   public final int id;
   public int mark = 0;
 
+  // RTF: set when this block's fall-through successor was a goto-only block
+  // (now removed). Indicates the original bytecode had separate if-statements
+  // with explicit goto instructions, not a || short-circuit evaluation.
+  public boolean rtfFallthroughWasGoto = false;
+
   // *****************************************************************************
   // private fields
   // *****************************************************************************

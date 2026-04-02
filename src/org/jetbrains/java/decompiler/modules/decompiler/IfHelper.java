@@ -201,6 +201,17 @@ public final class IfHelper {
             statexpr.setCondition(new FunctionExprent(FunctionType.BOOLEAN_AND, lstOperands, null));
             statexpr.addBytecodeOffsets(ifchild.getHeadexprent().bytecode);
 
+            // RTF: propagate goto-fallthrough flag from child to parent.
+            // The child's head block may have had a goto fall-through that
+            // should prevent this compound condition from being merged into ||.
+            if (ifchild.getFirst() instanceof BasicBlockStatement) {
+              if (((BasicBlockStatement) ifchild.getFirst()).getBlock().rtfFallthroughWasGoto) {
+                if (ifparent.getFirst() instanceof BasicBlockStatement) {
+                  ((BasicBlockStatement) ifparent.getFirst()).getBlock().rtfFallthroughWasGoto = true;
+                }
+              }
+            }
+
             return true;
           }
         }
@@ -442,6 +453,17 @@ public final class IfHelper {
           // Block the merge to preserve the original branch directions.
           if (path == 2 && DecompilerContext.isRoundtripFidelity()) {
             return false;
+          }
+          // RTF: path 1 merges sequential ifs into ||. Block when the original
+          // had SEPARATE if-statements (ifeq+goto per term) - detected by the
+          // rtfFallthroughWasGoto flag set during CFG processing.
+          if (path == 1 && DecompilerContext.isRoundtripFidelity()) {
+            Statement head = firstif.getFirst();
+            if (head instanceof BasicBlockStatement) {
+              if (((BasicBlockStatement) head).getBlock().rtfFallthroughWasGoto) {
+                return false;
+              }
+            }
           }
           IfStatement secondif = (IfStatement) elsebranch.value;
           Statement parent = firstif.getParent();

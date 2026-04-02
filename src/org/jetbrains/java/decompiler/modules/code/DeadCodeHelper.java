@@ -248,6 +248,23 @@ public final class DeadCodeHelper {
       }
     }
 
+    // RTF: before removing empty blocks, tag their predecessors when the
+    // empty block was a goto-only block (fall-through from a conditional
+    // branch). This distinguishes separate ifs (ifeq+goto) from || (ifne).
+    if (DecompilerContext.isRoundtripFidelity()) {
+      for (BasicBlock block : graph.getBlocks()) {
+        if (block.getSeq().isEmpty() && block.getSuccs().size() == 1) {
+          for (BasicBlock pred : block.getPreds()) {
+            Instruction lastInsn = pred.getLastInstruction();
+            if (lastInsn != null && lastInsn.group == CodeConstants.GROUP_JUMP
+                && lastInsn.opcode != CodeConstants.opc_goto) {
+              pred.rtfFallthroughWasGoto = true;
+            }
+          }
+        }
+      }
+    }
+
     removeEmptyBlocks(graph);
   }
 
@@ -674,6 +691,11 @@ public final class DeadCodeHelper {
               }
 
               if (sameRanges) {
+                // RTF: propagate goto-fallthrough tag when merging blocks
+                if (next.rtfFallthroughWasGoto) {
+                  block.rtfFallthroughWasGoto = true;
+                }
+
                 seq.addSequence(next.getSeq());
                 block.getInstrOldOffsets().addAll(next.getInstrOldOffsets());
                 next.getSeq().clear();
