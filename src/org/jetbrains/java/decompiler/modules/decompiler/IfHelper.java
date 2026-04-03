@@ -11,6 +11,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.InvocationExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.IfExprent;
+import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.BasicBlockStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
@@ -201,14 +202,17 @@ public final class IfHelper {
             statexpr.setCondition(new FunctionExprent(FunctionType.BOOLEAN_AND, lstOperands, null));
             statexpr.addBytecodeOffsets(ifchild.getHeadexprent().bytecode);
 
-            // RTF: propagate goto-fallthrough flag from child to parent.
-            // The child's head block may have had a goto fall-through that
+            // RTF: propagate flags from child to parent.
+            // The child's head block may have had a goto/return fall-through that
             // should prevent this compound condition from being merged into ||.
-            if (ifchild.getFirst() instanceof BasicBlockStatement) {
-              if (((BasicBlockStatement) ifchild.getFirst()).getBlock().rtfFallthroughWasGoto) {
-                if (ifparent.getFirst() instanceof BasicBlockStatement) {
-                  ((BasicBlockStatement) ifparent.getFirst()).getBlock().rtfFallthroughWasGoto = true;
-                }
+            if (ifchild.getFirst() instanceof BasicBlockStatement && ifparent.getFirst() instanceof BasicBlockStatement) {
+              BasicBlock childBlock = ((BasicBlockStatement) ifchild.getFirst()).getBlock();
+              BasicBlock parentBlock = ((BasicBlockStatement) ifparent.getFirst()).getBlock();
+              if (childBlock.rtfFallthroughWasGoto) {
+                parentBlock.rtfFallthroughWasGoto = true;
+              }
+              if (childBlock.rtfFallthroughWasReturn) {
+                parentBlock.rtfFallthroughWasReturn = true;
               }
             }
 

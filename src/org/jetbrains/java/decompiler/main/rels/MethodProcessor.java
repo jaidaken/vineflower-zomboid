@@ -955,46 +955,57 @@ public class MethodProcessor implements Runnable {
   }
 
   /**
-   * RTF: extract guard clauses absorbed into method-level wrapping ifs.
-   * Pattern: if (cond) { entire_body } at method level in a void method.
+   * RTF: extract guard clauses absorbed into wrapping ifs at any nesting level.
+   * Pattern: if (cond) { body } as last child of a SequenceStatement, in void methods.
    * The original was: if (!cond) { return; } body
    * Convert IFTYPE_IF wrapping body -> IFTYPE_IF guard + sibling body.
    */
   private static void extractMethodStartGuards(Statement root, MethodDescriptor md) {
     if (md.ret.type != CodeType.VOID) return;
+    extractGuardsRecursive(root);
+  }
 
-    // Find the IfStatement at method level
-    Statement first = root.getFirst();
-    IfStatement ifStat = null;
+  private static void extractGuardsRecursive(Statement stat) {
+    for (Statement child : new ArrayList<>(stat.getStats())) {
+      extractGuardsRecursive(child);
+    }
 
-    if (first instanceof IfStatement) {
-      ifStat = (IfStatement) first;
-    } else if (first instanceof SequenceStatement) {
-      SequenceStatement seq = (SequenceStatement) first;
-      int lastIdx = seq.getStats().size() - 1;
-      if (lastIdx >= 0 && seq.getStats().get(lastIdx) instanceof IfStatement) {
-        ifStat = (IfStatement) seq.getStats().get(lastIdx);
+    // Case 1: IfStatement is direct child of RootStatement
+    if (stat instanceof RootStatement) {
+      Statement first = stat.getFirst();
+      if (first instanceof IfStatement) {
+        if (tryExtractGuard((IfStatement) first, null, stat)) return;
       }
     }
 
-    if (ifStat == null) return;
-    if (ifStat.iftype != IfStatement.IFTYPE_IF) return;
-    if (ifStat.getIfstat() == null) return;
-    if (ifStat.getElsestat() != null) return;
+    // Case 2: IfStatement is last child of a SequenceStatement
+    if (stat instanceof SequenceStatement) {
+      SequenceStatement seq = (SequenceStatement) stat;
+      int lastIdx = seq.getStats().size() - 1;
+      if (lastIdx >= 0 && seq.getStats().get(lastIdx) instanceof IfStatement) {
+        IfStatement ifStat = (IfStatement) seq.getStats().get(lastIdx);
+        tryExtractGuard(ifStat, seq, seq.getParent());
+      }
+    }
+  }
+
+  private static boolean tryExtractGuard(IfStatement ifStat, SequenceStatement parentSeq, Statement grandParent) {
+    if (ifStat.iftype != IfStatement.IFTYPE_IF) return false;
+    if (ifStat.getIfstat() == null) return false;
+    if (ifStat.getElsestat() != null) return false;
 
     // Verify: head block had a guard clause pattern (ifXX + return)
     Statement head = ifStat.getFirst();
-    if (!(head instanceof BasicBlockStatement)) return;
+    if (!(head instanceof BasicBlockStatement)) return false;
     BasicBlock headBlock = ((BasicBlockStatement) head).getBlock();
-    if (!headBlock.rtfFallthroughWasReturn && !headBlock.rtfFallthroughWasGoto) return;
+    if (!headBlock.rtfFallthroughWasReturn) return false;
 
-    // If-body is the extracted body
     Statement ifBody = ifStat.getIfstat();
 
     // If-body must be non-trivial
     if (ifBody instanceof BasicBlockStatement) {
       List<Exprent> exprents = ifBody.getExprents();
-      if (exprents != null && exprents.size() <= 1) return;
+      if (exprents != null && exprents.size() <= 1) return false;
     }
 
     // === Transform ===
@@ -1030,39 +1041,33 @@ public class MethodProcessor implements Runnable {
       condExpr.setCondition(simplified != null ? simplified : negated);
     }
 
-    // Move successor edges from ifStat to ifBody (the body now exits the method)
+    // Move successor edges from ifStat to ifBody
     for (StatEdge edge : new ArrayList<>(ifStat.getAllSuccessorEdges())) {
       ifStat.removeSuccessor(edge);
       edge.setSource(ifBody);
       ifBody.addSuccessor(edge);
     }
 
-    // Create SequenceStatement: [guard-if, extracted-body]
-    SequenceStatement wrapper = new SequenceStatement(Arrays.asList(ifStat, ifBody));
-    ifStat.setParent(wrapper);
-    ifBody.setParent(wrapper);
-
     // if -> body fall-through
     ifStat.addSuccessor(new StatEdge(StatEdge.TYPE_REGULAR, ifStat, ifBody));
 
-    // Replace the old first child in root with the wrapper
-    if (first == ifStat) {
-      // IfStatement was direct child of root
-      root.getStats().removeWithKey(ifStat.id);
-      root.getStats().addWithKeyAndIndex(0, wrapper, wrapper.id);
-      wrapper.setParent(root);
-      root.setFirst(wrapper);
-    } else if (first instanceof SequenceStatement) {
-      // IfStatement was last child of a sequence
-      SequenceStatement seq = (SequenceStatement) first;
-      int idx = seq.getStats().getIndexByKey(ifStat.id);
-      seq.getStats().removeWithKey(ifStat.id);
-      // Add wrapper's children (ifStat and ifBody) as siblings
-      seq.getStats().addWithKeyAndIndex(idx, ifStat, ifStat.id);
-      ifStat.setParent(seq);
-      seq.getStats().addWithKeyAndIndex(idx + 1, ifBody, ifBody.id);
-      ifBody.setParent(seq);
+    // Place the extracted body after the IfStatement
+    if (parentSeq != null) {
+      // IfStatement is inside a SequenceStatement - add body as sibling
+      int idx = parentSeq.getStats().getIndexByKey(ifStat.id);
+      parentSeq.getStats().addWithKeyAndIndex(idx + 1, ifBody, ifBody.id);
+      ifBody.setParent(parentSeq);
+    } else if (grandParent instanceof RootStatement) {
+      // IfStatement is direct child of RootStatement - wrap in SequenceStatement
+      SequenceStatement wrapper = new SequenceStatement(Arrays.asList(ifStat, ifBody));
+      ifStat.setParent(wrapper);
+      ifBody.setParent(wrapper);
+      grandParent.getStats().removeWithKey(ifStat.id);
+      grandParent.getStats().addWithKeyAndIndex(0, wrapper, wrapper.id);
+      wrapper.setParent(grandParent);
+      ((RootStatement) grandParent).setFirst(wrapper);
     }
+    return true;
   }
 
   /**
