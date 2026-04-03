@@ -302,10 +302,7 @@ public class IfStatement extends Statement {
           return buf;
         }
       }
-      // Simple condition: negate the whole condition for the empty-if form.
-      // The empty-if trick is needed to reproduce the original goto at the end
-      // of the fall-through body: if(!cond){} else{body} makes javac emit
-      // ifXX ELSE; goto END; ELSE: body; END: (the 2-instruction pattern).
+      // Negate the condition (same for both rendering paths below).
       IfExprent negated = (IfExprent) ifExpr.copy();
       negated.negateIf();
       // Simplify double-negation (e.g. !(!x) -> x) so the condition operator
@@ -314,6 +311,26 @@ public class IfStatement extends Statement {
       if (simplifiedCond != null) {
         negated.setCondition(simplifiedCond);
       }
+
+      // RTF: inside loops, use if(cond){continue;} + body instead of
+      // if(!cond){} else{body}. Both produce the correct opcode, but
+      // continue targets the loop header directly, while empty-then
+      // targets the end of the else block (wrong goto offset).
+      // Skip when ifstat is a terminating block (return/throw/break) -
+      // rendering it flat after continue makes sibling code unreachable.
+      if (rtfIsInsideLoop() && !rtfIsTerminatingBlock(ifstat)) {
+        buf.appendIndent(indent);
+        buf.append(negated.toJava(indent));
+        buf.append(" {").appendLineSeparator();
+        buf.appendIndent(indent + 1).append("continue;").appendLineSeparator();
+        buf.appendIndent(indent).append("}").appendLineSeparator();
+        buf.append(ExprProcessor.jmpWrapper(ifstat, indent, false));
+        return buf;
+      }
+
+      // Simple condition: use the empty-if trick to reproduce the original
+      // goto at the end of the fall-through body: if(!cond){} else{body}
+      // makes javac emit ifXX ELSE; goto END; ELSE: body; END:
       buf.appendIndent(indent);
       buf.append(negated.toJava(indent));
       buf.append(" {").appendLineSeparator();
@@ -808,6 +825,55 @@ public class IfStatement extends Statement {
       case LE: return IfExprent.Type.LE;
       default: return null;
     }
+  }
+
+  /**
+   * RTF: check if a statement terminates unconditionally (return/throw/break/continue).
+   * When true, the statement must NOT be rendered flat after a continue because
+   * it would make sibling code unreachable. Recurses into sequence last children.
+   */
+  private static boolean rtfIsTerminatingBlock(Statement stat) {
+    if (stat instanceof BasicBlockStatement) {
+      List<Exprent> exprents = stat.getExprents();
+      if (exprents != null && !exprents.isEmpty()) {
+        Exprent last = exprents.get(exprents.size() - 1);
+        if (last instanceof ExitExprent) {
+          return true;
+        }
+      }
+    }
+    List<StatEdge> succs = stat.getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
+    if (succs.size() == 1) {
+      StatEdge edge = succs.get(0);
+      if (edge.getType() != StatEdge.TYPE_REGULAR && edge.explicit
+          && !(edge.getDestination() instanceof DummyExitStatement)) {
+        return true;
+      }
+    }
+    if (stat instanceof SequenceStatement) {
+      List<Statement> children = stat.getStats();
+      if (!children.isEmpty()) {
+        return rtfIsTerminatingBlock(children.get(children.size() - 1));
+      }
+    }
+    return false;
+  }
+
+  /**
+   * RTF: detect when this IfStatement is inside a loop (DoStatement).
+   */
+  private boolean rtfIsInsideLoop() {
+    Statement parent = this.getParent();
+    while (parent != null) {
+      if (parent instanceof DoStatement) {
+        return true;
+      }
+      if (parent instanceof RootStatement) {
+        return false;
+      }
+      parent = parent.getParent();
+    }
+    return false;
   }
 
   /**
