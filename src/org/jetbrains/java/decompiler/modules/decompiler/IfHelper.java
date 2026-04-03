@@ -890,14 +890,12 @@ public final class IfHelper {
         return false;
       }
 
-      // RTF: block swapBranches when the if-body is a simple BasicBlock that
-      // had a forward trailing goto. Swapping eliminates the goto by reordering.
-      if (!noelsestat && DecompilerContext.isRoundtripFidelity()) {
+      // RTF: block swapBranches when the if-body had a forward trailing goto.
+      // Swapping eliminates the goto by reordering blocks (diff=-1).
+      if (DecompilerContext.isRoundtripFidelity()) {
         Statement ifbody = ifstat.getIfstat();
-        if (ifbody instanceof BasicBlockStatement) {
-          if (((BasicBlockStatement) ifbody).getBlock().rtfHadTrailingGoto) {
-            return false;
-          }
+        if (ifbody != null && rtfIfBodyHadTrailingGoto(ifbody)) {
+          return false;
         }
       }
 

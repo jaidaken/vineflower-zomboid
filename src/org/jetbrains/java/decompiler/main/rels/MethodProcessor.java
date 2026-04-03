@@ -7,6 +7,7 @@ import org.jetbrains.java.decompiler.api.plugin.pass.PassContext;
 import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.code.Instruction;
 import org.jetbrains.java.decompiler.code.InstructionSequence;
+import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
 import org.jetbrains.java.decompiler.code.cfg.ControlFlowGraph;
 import org.jetbrains.java.decompiler.code.cfg.ExceptionRangeCFG;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
@@ -29,6 +30,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.DotExporter;
 import org.jetbrains.java.decompiler.util.StartEndPair;
@@ -692,6 +694,10 @@ public class MethodProcessor implements Runnable {
         headExpr.setCondition(simplified != null ? simplified : negated);
       }
     }
+    // Note: IFTYPE_IF with null ifstat (goto-style) is NOT reversed here.
+    // reorderIf's edge swap + condition negation for the noifstat path
+    // preserves the correct javac opcode (double negation cancels).
+    // Reversing would change the opcode and cause regressions.
 
     ifStat.setRtfConditionFlipped(false);
   }
@@ -706,6 +712,70 @@ public class MethodProcessor implements Runnable {
    * Fix: for if-else where the else-body is a short terminating block (return/throw)
    * and the if-body is longer, swap them so javac places the short block first.
    */
+  /**
+   * RTF: add explicit return after CatchStatement when the catch body has a
+   * preserved return but the try body's exit path has no explicit return.
+   * Without this, javac adds a goto in the try body to skip the catch handler.
+   */
+  private static void addReturnAfterCatch(Statement stat, MethodDescriptor md) {
+    if (md.ret.type != CodeType.VOID) return;
+
+    for (Statement child : new ArrayList<>(stat.getStats())) {
+      addReturnAfterCatch(child, md);
+    }
+
+    if (!(stat instanceof SequenceStatement)) return;
+    SequenceStatement seq = (SequenceStatement) stat;
+
+    // Only process CatchStatements that are the LAST statement in a root-level
+    // sequence (at method end). Adding returns elsewhere adds unnecessary instructions.
+    if (!(seq.getParent() instanceof RootStatement)) return;
+    int lastIdx = seq.getStats().size() - 1;
+    for (int i = lastIdx; i >= 0; i--) {
+      Statement st = seq.getStats().get(i);
+      if (!(st instanceof CatchStatement) && !(st instanceof CatchAllStatement)) continue;
+      if (i != lastIdx) continue; // must be the last statement
+
+      // Check if catch body ends with a void return
+      List<Statement> children = st.getStats();
+      if (children.size() < 2) continue;
+      Statement catchBody = children.get(1);
+      Statement lastInCatch = catchBody;
+      while (!lastInCatch.getStats().isEmpty()) {
+        lastInCatch = lastInCatch.getStats().get(lastInCatch.getStats().size() - 1);
+      }
+      if (lastInCatch.getExprents() == null || lastInCatch.getExprents().isEmpty()) continue;
+      Exprent lastExpr = lastInCatch.getExprents().get(lastInCatch.getExprents().size() - 1);
+      if (!(lastExpr instanceof ExitExprent)) continue;
+      ExitExprent exit = (ExitExprent) lastExpr;
+      if (exit.getExitType() != ExitExprent.Type.RETURN || exit.getValue() != null) continue;
+
+      // Check next statement - is it already a return?
+      Statement next = seq.getStats().get(i + 1);
+      if (next instanceof BasicBlockStatement) {
+        List<Exprent> nextExprents = next.getExprents();
+        if (nextExprents != null && !nextExprents.isEmpty()) {
+          Exprent nextLast = nextExprents.get(nextExprents.size() - 1);
+          if (nextLast instanceof ExitExprent) continue; // already has return
+        }
+      }
+
+      // Add explicit return; after the CatchStatement.
+      // This ensures both try and catch paths have separate returns,
+      // matching the original bytecode's 2-return pattern.
+      BasicBlockStatement returnBlock = new BasicBlockStatement(
+          new BasicBlock(
+              DecompilerContext.getCounterContainer().getCounterAndIncrement(CounterContainer.STATEMENT_COUNTER)));
+      List<Exprent> returnExprents = new ArrayList<>();
+      returnExprents.add(new ExitExprent(ExitExprent.Type.RETURN, null, VarType.VARTYPE_VOID, null, null));
+      returnBlock.setExprents(returnExprents);
+
+      seq.getStats().addWithKeyAndIndex(i + 1, returnBlock, returnBlock.id);
+      returnBlock.setParent(seq);
+      break; // only add once per sequence
+    }
+  }
+
   private static void fixGuardClauseLayout(Statement stat) {
     for (Statement child : new ArrayList<>(stat.getStats())) {
       fixGuardClauseLayout(child);

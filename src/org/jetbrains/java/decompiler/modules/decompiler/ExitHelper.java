@@ -4,6 +4,10 @@ package org.jetbrains.java.decompiler.modules.decompiler;
 import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.collectors.CounterContainer;
+import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.code.Instruction;
+import org.jetbrains.java.decompiler.code.InstructionSequence;
+import org.jetbrains.java.decompiler.main.rels.MethodWrapper;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.ConstExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
@@ -298,8 +302,7 @@ public final class ExitHelper {
               // RTF: preserve void returns inside guard clause IfStatements where
               // both branches terminate. The 2 returns are needed for byte-exact match.
               if (DecompilerContext.isRoundtripFidelity()) {
-                boolean isGuard = rtfIsGuardClauseReturn(source);
-                if (isGuard) {
+                if (rtfIsGuardClauseReturn(source, ex)) {
                   continue;
                 }
               }
@@ -322,9 +325,68 @@ public final class ExitHelper {
    * up the parent chain, look for an IfStatement with rtfBothBranchesTerminate
    * (and not rtfOriginalHadGotoFallthrough, which is handled separately).
    */
-  private static boolean rtfIsGuardClauseReturn(Statement source) {
-    // Source must be a direct child (ifstat or elsestat) of the IfStatement
+  private static boolean rtfIsGuardClauseReturn(Statement source, ExitExprent ex) {
+    // Check for method-end return following a CatchStatement. When the catch body's
+    // return is preserved, the method-end return must also be preserved so javac
+    // produces 2 returns (no goto needed to skip the catch handler).
     Statement parent = source.getParent();
+    if (source instanceof BasicBlockStatement) {
+      List<Exprent> srcExprents = source.getExprents();
+      if (srcExprents != null && srcExprents.size() == 1 && parent instanceof SequenceStatement) {
+        SequenceStatement seq = (SequenceStatement) parent;
+        int idx = seq.getStats().getIndexByKey(source.id);
+        if (idx > 0) {
+          Statement prev = seq.getStats().get(idx - 1);
+          if (prev instanceof CatchStatement || prev instanceof CatchAllStatement) {
+            if (rtfOriginalWasReturn(ex)) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+
+    // Check for try-catch pattern: return at the end of a try body or catch body.
+    // The original has separate returns for each path; javac would share them.
+    // Walk up through SequenceStatements to find a CatchStatement ancestor.
+    if (source instanceof BasicBlockStatement) {
+      List<Exprent> exprents = source.getExprents();
+      if (exprents != null && exprents.size() == 1) {
+        // Direct child of CatchStatement/CatchAllStatement (return-only block)
+        if (parent instanceof CatchStatement || parent instanceof CatchAllStatement) {
+          return true;
+        }
+      }
+      // Catch/try body return: source is in a catch or try body.
+      // Preserve catch body returns always. Preserve try body returns
+      // only when the catch body also returns (not throws).
+      if (exprents != null && !exprents.isEmpty()) {
+        Statement catchParent = parent;
+        Statement catchChild = source;
+        // Walk through SequenceStatements to find CatchStatement
+        while (catchParent instanceof SequenceStatement) {
+          SequenceStatement seq = (SequenceStatement) catchParent;
+          int idx = seq.getStats().getIndexByKey(catchChild.id);
+          if (idx < 0 || idx < seq.getStats().size() - 1) break;
+          catchChild = catchParent;
+          catchParent = catchParent.getParent();
+        }
+        if (catchParent instanceof CatchStatement || catchParent instanceof CatchAllStatement) {
+          if (catchChild != catchParent.getFirst()) {
+            // Catch body return - preserve
+            return true;
+          } else {
+            // Try body return - only preserve when the original had return (not goto)
+            if (rtfOriginalWasReturn(ex)) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+
+    // Check for IfStatement guard clause pattern
+    // Source must be a direct child (ifstat or elsestat) of the IfStatement
     if (!(parent instanceof IfStatement)) return false;
     IfStatement ifStat = (IfStatement) parent;
     if (ifStat.isRtfOriginalHadGotoFallthrough()) return false;
@@ -378,6 +440,30 @@ public final class ExitHelper {
     }
 
     return true;
+  }
+
+
+  /**
+   * RTF: check if the ExitExprent's bytecode offset corresponds to an actual
+   * return instruction in the original bytecode (not a goto that was converted).
+   */
+  private static boolean rtfOriginalWasReturn(ExitExprent ex) {
+    if (ex.bytecode == null) return false;
+    MethodWrapper mw = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+    if (mw == null) return false;
+    InstructionSequence seq = mw.methodStruct.getInstructionSequence();
+    if (seq == null) return false;
+
+    for (int offset = ex.bytecode.nextSetBit(0); offset >= 0; offset = ex.bytecode.nextSetBit(offset + 1)) {
+      int instrIndex = seq.getPointerByAbsOffset(offset);
+      if (instrIndex >= 0) {
+        Instruction insn = seq.getInstr(instrIndex);
+        if (insn.opcode == CodeConstants.opc_return) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   // Fixes chars being returned when ints are required
