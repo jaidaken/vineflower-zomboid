@@ -451,11 +451,19 @@ public class NewExprent extends Exprent {
     else if (newType.arrayDim == 0) {
       if (!enumConst) {
         TextBuffer enclosing = null;
+        boolean rtfSkipQualifier = false;
 
         if (constructor != null) {
           enclosing = getQualifiedNewInstance(newType.value, constructor.getLstParameters(), indent);
           if (enclosing != null) {
-            buf.append(enclosing).append('.');
+            // RTF: skip the qualifier when the enclosing ref is a ClassName.this
+            // reference (always non-null). Unqualified new avoids javac's
+            // Objects.requireNonNull call (+3 bytecode instructions).
+            if (DecompilerContext.isRoundtripFidelity() && rtfIsEnclosingThis(enclosing)) {
+              rtfSkipQualifier = true;
+            } else {
+              buf.append(enclosing).append('.');
+            }
           }
         }
 
@@ -552,6 +560,16 @@ public class NewExprent extends Exprent {
   public static boolean probablySyntheticParameter(String className) {
     ClassNode node = DecompilerContext.getClassProcessor().getMapRootClasses().get(className);
     return node != null && node.type == ClassNode.Type.ANONYMOUS;
+  }
+
+  /**
+   * RTF: check if a TextBuffer contains a ClassName.this pattern.
+   * Used to detect enclosing references that are always non-null,
+   * where skipping the qualified new avoids javac's requireNonNull.
+   */
+  private static boolean rtfIsEnclosingThis(TextBuffer enclosing) {
+    String text = enclosing.toString().trim();
+    return text.endsWith(".this") || text.equals("this");
   }
 
   private static TextBuffer getQualifiedNewInstance(String classname, List<Exprent> lstParams, int indent) {
