@@ -25,6 +25,11 @@ public class BasicBlock implements IGraphNode {
   // with explicit goto instructions, not a || short-circuit evaluation.
   public boolean rtfFallthroughWasGoto = false;
 
+  // RTF: set when this block originally had a goto as its last instruction
+  // (now removed by DeadCodeHelper.removeGotos). Indicates the original
+  // bytecode had an explicit jump that reorderIf's swapBranches would eliminate.
+  public boolean rtfHadTrailingGoto = false;
+
   // *****************************************************************************
   // private fields
   // *****************************************************************************

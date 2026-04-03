@@ -244,6 +244,17 @@ public final class DeadCodeHelper {
           continue;
         }
 
+        // RTF: tag block when goto is a FORWARD jump (to code after this block).
+        // Backward gotos are loop-back jumps that must NOT block reorderIf.
+        if (DecompilerContext.isRoundtripFidelity() && block.getSuccs().size() == 1) {
+          BasicBlock target = block.getSuccs().get(0);
+          int gotoOffset = block.getInstrOldOffsets().get(block.size() - 1);
+          int targetOffset = target.getInstrOldOffsets().isEmpty() ? -1 : target.getInstrOldOffsets().get(0);
+          if (targetOffset > gotoOffset) {
+            block.rtfHadTrailingGoto = true;
+          }
+        }
+
         block.getSeq().removeLast();
       }
     }
@@ -691,9 +702,12 @@ public final class DeadCodeHelper {
               }
 
               if (sameRanges) {
-                // RTF: propagate goto-fallthrough tag when merging blocks
+                // RTF: propagate goto tags when merging blocks
                 if (next.rtfFallthroughWasGoto) {
                   block.rtfFallthroughWasGoto = true;
+                }
+                if (next.rtfHadTrailingGoto) {
+                  block.rtfHadTrailingGoto = true;
                 }
 
                 seq.addSequence(next.getSeq());

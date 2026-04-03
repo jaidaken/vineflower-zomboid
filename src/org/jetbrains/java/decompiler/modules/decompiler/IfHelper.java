@@ -282,6 +282,22 @@ public final class IfHelper {
   }
 
   /**
+   * Check if an if-body's last BasicBlock had a trailing goto in the original bytecode.
+   * Walks to the last BasicBlockStatement in the body and checks rtfHadTrailingGoto.
+   */
+  private static boolean rtfIfBodyHadTrailingGoto(Statement body) {
+    // Find the last BasicBlockStatement in the body
+    Statement last = body;
+    while (!last.getStats().isEmpty()) {
+      last = last.getStats().get(last.getStats().size() - 1);
+    }
+    if (last instanceof BasicBlockStatement) {
+      return ((BasicBlockStatement) last).getBlock().rtfHadTrailingGoto;
+    }
+    return false;
+  }
+
+  /**
    * Checks whether an if-statement's if-body is a guard clause (terminates via return or throw).
    * A guard clause is a simple block whose last exprent is an ExitExprent (return/throw),
    * or whose if-edge is a break/continue. In RTF mode, these should be preserved as-is
@@ -872,6 +888,17 @@ public final class IfHelper {
       // safely blocked without causing type inference failures.
       if (noelsestat && !noifstat && isRtfGuardClause(ifstat)) {
         return false;
+      }
+
+      // RTF: block swapBranches when the if-body is a simple BasicBlock that
+      // had a forward trailing goto. Swapping eliminates the goto by reordering.
+      if (!noelsestat && DecompilerContext.isRoundtripFidelity()) {
+        Statement ifbody = ifstat.getIfstat();
+        if (ifbody instanceof BasicBlockStatement) {
+          if (((BasicBlockStatement) ifbody).getBlock().rtfHadTrailingGoto) {
+            return false;
+          }
+        }
       }
 
       // negate the if condition
