@@ -595,6 +595,7 @@ public class MethodProcessor implements Runnable {
       fixLambdaOrdering(root);
       reInlineGuardClauses(root);
       extractMethodStartGuards(root, md);
+      convertLoopExitReturnToBreak(root, md);
       restoreIincCompoundAssignments(root);
     }
 
@@ -1062,6 +1063,95 @@ public class MethodProcessor implements Runnable {
       seq.getStats().addWithKeyAndIndex(idx + 1, ifBody, ifBody.id);
       ifBody.setParent(seq);
     }
+  }
+
+  /**
+   * RTF: convert loop-exit return to break + post-loop return.
+   * Pattern: while(true) { ... if(cond){return;} ... }
+   * becomes: while(true) { ... if(cond){break;} ... } return;
+   *
+   * This makes javac emit goto (break) + shared return, matching the
+   * original bytecode which had goto + return instead of inline return.
+   */
+  private static void convertLoopExitReturnToBreak(Statement stat, MethodDescriptor md) {
+    if (md.ret.type != CodeType.VOID) return;
+
+    for (Statement child : new ArrayList<>(stat.getStats())) {
+      convertLoopExitReturnToBreak(child, md);
+    }
+
+    if (!(stat instanceof DoStatement)) return;
+    DoStatement loop = (DoStatement) stat;
+    if (loop.getLooptype() != DoStatement.Type.INFINITE) return;
+
+    // Find if-statements inside the loop body that have a void return as if-body
+    Statement loopBody = loop.getFirst();
+    List<Statement> bodyChildren = collectSequenceChildren(loopBody);
+
+    for (Statement child : bodyChildren) {
+      if (!(child instanceof IfStatement)) continue;
+      IfStatement ifStat = (IfStatement) child;
+      if (ifStat.iftype != IfStatement.IFTYPE_IF) continue;
+
+      Statement ifBody = ifStat.getIfstat();
+      if (ifBody == null) continue;
+      if (!(ifBody instanceof BasicBlockStatement)) continue;
+
+      List<Exprent> exprents = ifBody.getExprents();
+      if (exprents == null || exprents.size() != 1) continue;
+      if (!(exprents.get(0) instanceof ExitExprent)) continue;
+
+      ExitExprent exit = (ExitExprent) exprents.get(0);
+      if (exit.getExitType() != ExitExprent.Type.RETURN || exit.getValue() != null) continue;
+
+      // Verify: the head block had rtfFallthroughWasGoto (the original had
+      // goto to a shared return, not inline return)
+      Statement head = ifStat.getFirst();
+      if (!(head instanceof BasicBlockStatement)) continue;
+      BasicBlock headBlock = ((BasicBlockStatement) head).getBlock();
+      if (!headBlock.rtfFallthroughWasGoto) continue;
+
+      // Convert: remove the return exprent, replace with break edge logic
+      exprents.clear();
+
+      // Remove old if-edge and add break edge to loop
+      StatEdge oldIfEdge = ifStat.getIfEdge();
+      if (oldIfEdge != null) {
+        ifStat.getFirst().removeSuccessor(oldIfEdge);
+      }
+
+      // The if-body becomes a break target
+      StatEdge breakEdge = new StatEdge(StatEdge.TYPE_BREAK, ifStat.getFirst(), loop.getParent(), loop);
+      ifStat.getFirst().addSuccessor(breakEdge);
+      ifStat.setIfEdge(breakEdge);
+      ifStat.setIfstat(null);
+      ifStat.getStats().removeWithKey(ifBody.id);
+
+      // Add explicit return; after the loop in the parent sequence
+      Statement loopParent = loop.getParent();
+      if (loopParent instanceof SequenceStatement) {
+        SequenceStatement parentSeq = (SequenceStatement) loopParent;
+        int loopIdx = parentSeq.getStats().getIndexByKey(loop.id);
+        if (loopIdx >= 0) {
+          BasicBlockStatement returnBlock = new BasicBlockStatement(
+              new BasicBlock(
+                  DecompilerContext.getCounterContainer().getCounterAndIncrement(CounterContainer.STATEMENT_COUNTER)));
+          returnBlock.setExprents(new ArrayList<>(List.of(
+              new ExitExprent(ExitExprent.Type.RETURN, null, VarType.VARTYPE_VOID, null, null))));
+          parentSeq.getStats().addWithKeyAndIndex(loopIdx + 1, returnBlock, returnBlock.id);
+          returnBlock.setParent(parentSeq);
+        }
+      }
+
+      break; // only handle first loop-exit guard per loop
+    }
+  }
+
+  private static List<Statement> collectSequenceChildren(Statement stat) {
+    if (stat instanceof SequenceStatement) {
+      return new ArrayList<>(stat.getStats());
+    }
+    return List.of(stat);
   }
 
   /**
