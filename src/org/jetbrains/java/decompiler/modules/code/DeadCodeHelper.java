@@ -273,6 +273,19 @@ public final class DeadCodeHelper {
             }
           }
         }
+        // Tag when fall-through from conditional branch is a single return
+        if (block.getSeq().length() == 1) {
+          Instruction insn = block.getSeq().getInstr(0);
+          if (insn.group == CodeConstants.GROUP_RETURN) {
+            for (BasicBlock pred : block.getPreds()) {
+              Instruction lastInsn = pred.getLastInstruction();
+              if (lastInsn != null && lastInsn.group == CodeConstants.GROUP_JUMP
+                  && lastInsn.opcode != CodeConstants.opc_goto) {
+                pred.rtfFallthroughWasReturn = true;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -708,6 +721,9 @@ public final class DeadCodeHelper {
                 }
                 if (next.rtfHadTrailingGoto) {
                   block.rtfHadTrailingGoto = true;
+                }
+                if (next.rtfFallthroughWasReturn) {
+                  block.rtfFallthroughWasReturn = true;
                 }
 
                 seq.addSequence(next.getSeq());

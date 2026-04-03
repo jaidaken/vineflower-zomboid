@@ -37,6 +37,7 @@ import org.jetbrains.java.decompiler.util.StartEndPair;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -593,6 +594,7 @@ public class MethodProcessor implements Runnable {
       fixGuardClauseLayout(root);
       fixLambdaOrdering(root);
       reInlineGuardClauses(root);
+      extractMethodStartGuards(root, md);
       restoreIincCompoundAssignments(root);
     }
 
@@ -949,6 +951,117 @@ public class MethodProcessor implements Runnable {
     ifStat.setNegated(!ifStat.isNegated());
     ifStat.toggleRtfIfBodyIsFallThrough();
     ifStat.toggleRtfConditionFlipped();
+  }
+
+  /**
+   * RTF: extract guard clauses absorbed into method-level wrapping ifs.
+   * Pattern: if (cond) { entire_body } at method level in a void method.
+   * The original was: if (!cond) { return; } body
+   * Convert IFTYPE_IF wrapping body -> IFTYPE_IF guard + sibling body.
+   */
+  private static void extractMethodStartGuards(Statement root, MethodDescriptor md) {
+    if (md.ret.type != CodeType.VOID) return;
+
+    // Find the IfStatement at method level
+    Statement first = root.getFirst();
+    IfStatement ifStat = null;
+
+    if (first instanceof IfStatement) {
+      ifStat = (IfStatement) first;
+    } else if (first instanceof SequenceStatement) {
+      SequenceStatement seq = (SequenceStatement) first;
+      int lastIdx = seq.getStats().size() - 1;
+      if (lastIdx >= 0 && seq.getStats().get(lastIdx) instanceof IfStatement) {
+        ifStat = (IfStatement) seq.getStats().get(lastIdx);
+      }
+    }
+
+    if (ifStat == null) return;
+    if (ifStat.iftype != IfStatement.IFTYPE_IF) return;
+    if (ifStat.getIfstat() == null) return;
+    if (ifStat.getElsestat() != null) return;
+
+    // Verify: head block had a guard clause pattern (ifXX + return)
+    Statement head = ifStat.getFirst();
+    if (!(head instanceof BasicBlockStatement)) return;
+    BasicBlock headBlock = ((BasicBlockStatement) head).getBlock();
+    if (!headBlock.rtfFallthroughWasReturn && !headBlock.rtfFallthroughWasGoto) return;
+
+    // If-body is the extracted body
+    Statement ifBody = ifStat.getIfstat();
+
+    // If-body must be non-trivial
+    if (ifBody instanceof BasicBlockStatement) {
+      List<Exprent> exprents = ifBody.getExprents();
+      if (exprents != null && exprents.size() <= 1) return;
+    }
+
+    // === Transform ===
+
+    // Create guard return block
+    BasicBlockStatement guardBlock = new BasicBlockStatement(
+        new BasicBlock(
+            DecompilerContext.getCounterContainer().getCounterAndIncrement(CounterContainer.STATEMENT_COUNTER)));
+    guardBlock.setExprents(new ArrayList<>(List.of(
+        new ExitExprent(ExitExprent.Type.RETURN, null, VarType.VARTYPE_VOID, null, null))));
+
+    // Detach if-body from IfStatement
+    ifStat.getStats().removeWithKey(ifBody.id);
+    StatEdge oldIfEdge = ifStat.getIfEdge();
+    if (oldIfEdge != null) {
+      ifStat.getFirst().removeSuccessor(oldIfEdge);
+    }
+
+    // Set guard block as new if-body
+    ifStat.setIfstat(guardBlock);
+    ifStat.getStats().addWithKey(guardBlock, guardBlock.id);
+    guardBlock.setParent(ifStat);
+    StatEdge newIfEdge = new StatEdge(StatEdge.TYPE_REGULAR, ifStat.getFirst(), guardBlock);
+    ifStat.getFirst().addSuccessor(newIfEdge);
+    ifStat.setIfEdge(newIfEdge);
+
+    // Negate condition
+    IfExprent condExpr = ifStat.getHeadexprent();
+    if (condExpr != null) {
+      Exprent negated = new FunctionExprent(
+          FunctionExprent.FunctionType.BOOL_NOT, condExpr.getCondition(), null);
+      Exprent simplified = SecondaryFunctionsHelper.propagateBoolNot(negated);
+      condExpr.setCondition(simplified != null ? simplified : negated);
+    }
+
+    // Move successor edges from ifStat to ifBody (the body now exits the method)
+    for (StatEdge edge : new ArrayList<>(ifStat.getAllSuccessorEdges())) {
+      ifStat.removeSuccessor(edge);
+      edge.setSource(ifBody);
+      ifBody.addSuccessor(edge);
+    }
+
+    // Create SequenceStatement: [guard-if, extracted-body]
+    SequenceStatement wrapper = new SequenceStatement(Arrays.asList(ifStat, ifBody));
+    ifStat.setParent(wrapper);
+    ifBody.setParent(wrapper);
+
+    // if -> body fall-through
+    ifStat.addSuccessor(new StatEdge(StatEdge.TYPE_REGULAR, ifStat, ifBody));
+
+    // Replace the old first child in root with the wrapper
+    if (first == ifStat) {
+      // IfStatement was direct child of root
+      root.getStats().removeWithKey(ifStat.id);
+      root.getStats().addWithKeyAndIndex(0, wrapper, wrapper.id);
+      wrapper.setParent(root);
+      root.setFirst(wrapper);
+    } else if (first instanceof SequenceStatement) {
+      // IfStatement was last child of a sequence
+      SequenceStatement seq = (SequenceStatement) first;
+      int idx = seq.getStats().getIndexByKey(ifStat.id);
+      seq.getStats().removeWithKey(ifStat.id);
+      // Add wrapper's children (ifStat and ifBody) as siblings
+      seq.getStats().addWithKeyAndIndex(idx, ifStat, ifStat.id);
+      ifStat.setParent(seq);
+      seq.getStats().addWithKeyAndIndex(idx + 1, ifBody, ifBody.id);
+      ifBody.setParent(seq);
+    }
   }
 
   /**

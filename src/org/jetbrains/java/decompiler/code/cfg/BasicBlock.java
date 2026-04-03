@@ -30,6 +30,10 @@ public class BasicBlock implements IGraphNode {
   // bytecode had an explicit jump that reorderIf's swapBranches would eliminate.
   public boolean rtfHadTrailingGoto = false;
 
+  // RTF: set when this conditional branch block's fall-through was a single
+  // return instruction (guard clause pattern: ifXX + return).
+  public boolean rtfFallthroughWasReturn = false;
+
   // *****************************************************************************
   // private fields
   // *****************************************************************************
