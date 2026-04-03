@@ -899,6 +899,25 @@ public final class IfHelper {
         }
       }
 
+      // RTF: block inversion of merged loop guard clauses.
+      // collapseIfIf merges separate if-conditions into a compound && with
+      // a continue/break edge: if(a && b){continue;}. This is the correct form -
+      // javac compiles it to separate branch instructions matching the original.
+      // Inverting to if(a || b){body} changes the instruction count.
+      // Only block when the head block had rtfFallthroughWasGoto, confirming the
+      // original bytecode had separate if-statements with an explicit goto.
+      if (DecompilerContext.isRoundtripFidelity() && noifstat) {
+        StatEdge ifedge = ifstat.getIfEdge();
+        if (ifedge != null && (ifedge.getType() == StatEdge.TYPE_CONTINUE
+                            || ifedge.getType() == StatEdge.TYPE_BREAK)) {
+          Statement head = ifstat.getFirst();
+          if (head instanceof BasicBlockStatement
+              && ((BasicBlockStatement) head).getBlock().rtfFallthroughWasGoto) {
+            return false;
+          }
+        }
+      }
+
       // negate the if condition
       IfExprent statexpr = ifstat.getHeadexprent();
       statexpr.setCondition(new FunctionExprent(FunctionType.BOOL_NOT, statexpr.getCondition(), null));
