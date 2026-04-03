@@ -248,19 +248,9 @@ public class FieldExprent extends Exprent {
 
     buf.addBytecodeMapping(bytecode);
 
-    // RTF: rename fields that would cause compilation issues
+    // RTF: keep original field names for byte-exact matching.
+    // $assertionsDisabled is kept with the $ prefix (valid Java identifier).
     String renderedName = name;
-    if (DecompilerContext.isRoundtripFidelity()) {
-      // Rename $assertionsDisabled to _assertionsDisabled
-      if ("$assertionsDisabled".equals(name)) {
-        renderedName = "_assertionsDisabled";
-      }
-      // Note: NOT renaming static fields that shadow class names in RTF mode.
-      // The original bytecode uses the shadowing name and the rename would cause
-      // permanent GETSTATIC/PUTSTATIC mismatch. Ambiguity is handled by
-      // ImportCollector.getShortNameInClassContext stripping the outer class
-      // qualifier for inner class references.
-    }
     buf.appendField(renderedName, false, classname, renderedName, descriptor);
 
     return buf;

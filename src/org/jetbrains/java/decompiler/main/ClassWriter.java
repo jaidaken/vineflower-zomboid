@@ -954,10 +954,7 @@ public class ClassWriter implements StatementWriter {
 
     String name = fd.getName();
     if (DecompilerContext.isRoundtripFidelity()) {
-      // Rename $assertionsDisabled to _assertionsDisabled
-      if ("$assertionsDisabled".equals(name)) {
-        name = "_assertionsDisabled";
-      }
+      // Keep $assertionsDisabled with original name for byte-exact matching.
       // Note: NOT renaming static fields that shadow class names in RTF mode.
     }
     if (interceptor != null) {
