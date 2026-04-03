@@ -747,6 +747,35 @@ public class FunctionExprent extends Exprent {
             inv1.forceUnboxing(true);
             inv2.forceUnboxing(true);
           }
+
+          // RTF: detect !a && !b ? X : Y (De Morgan from collapseIfIf) and render
+          // as a || b ? Y : X to preserve the original branch polarity. The && form
+          // compiles with ifne;ifne (both jump to false), while || compiles with
+          // ifne;ifeq (first jumps to true, second jumps to false), matching the
+          // original bytecode's shared-target pattern.
+          Exprent condExpr2 = lstOperands.get(0);
+          if (condExpr2 instanceof FunctionExprent condFunc
+              && condFunc.getFuncType() == FunctionType.BOOLEAN_AND) {
+            List<Exprent> andOps = condFunc.getLstOperands();
+            if (andOps.size() == 2
+                && andOps.get(0) instanceof FunctionExprent f0 && f0.getFuncType() == FunctionType.BOOL_NOT
+                && andOps.get(1) instanceof FunctionExprent f1 && f1.getFuncType() == FunctionType.BOOL_NOT) {
+              // Pattern matches: !a && !b ? X : Y → a || b ? Y : X
+              List<Exprent> orOps = new ArrayList<>();
+              orOps.add(f0.getLstOperands().get(0));  // a (un-negated)
+              orOps.add(f1.getLstOperands().get(0));  // b (un-negated)
+              FunctionExprent orExpr = new FunctionExprent(FunctionType.BOOLEAN_OR, orOps, condFunc.bytecode);
+              condBuf = wrapOperandString(orExpr, true, indent);
+              // Swap ternary branches
+              buf.append(condBuf)
+                .appendPossibleNewline(" ").append("? ")
+                .append(wrapOperandString(lstOperands.get(2), true, indent))  // was Y, now first
+                .appendPossibleNewline(" ").append(": ")
+                .append(wrapOperandString(lstOperands.get(1), true, indent)); // was X, now second
+              buf.popNewlineGroup();
+              return buf;
+            }
+          }
         }
         buf.append(condBuf)
           .appendPossibleNewline(" ").append("? ")
