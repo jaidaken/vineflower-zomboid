@@ -33,7 +33,10 @@ import org.jetbrains.java.decompiler.struct.consts.PrimitiveConstant;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.FieldDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
+import org.jetbrains.java.decompiler.struct.gen.generics.GenericClassDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.generics.GenericType;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericClassDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericFieldDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericMethodDescriptor;
@@ -259,6 +262,19 @@ public class ClassWriter implements StatementWriter {
                     VarType samType = md_sam_check.params[lpi];
                     if (samType.equals(lt)) {
                       // Raw context — this param would not get a type
+                      allParamsMatch = false;
+                      break;
+                    }
+                  }
+                  // Check if the type is a raw generic class (e.g., Entry instead of Entry<K,V>).
+                  // Emitting raw types causes methods to return Object, breaking compilation.
+                  // Skip explicit types so Java infers the parameterized types from context.
+                  if (lt.type == CodeType.OBJECT && lt.value != null && !(lt instanceof GenericType)) {
+                    StructClass paramClass = DecompilerContext.getStructContext() != null
+                        ? DecompilerContext.getStructContext().getClass(lt.value) : null;
+                    if (paramClass != null && paramClass.getSignature() != null
+                        && !paramClass.getSignature().fparameters.isEmpty()) {
+                      // Raw generic class — don't emit explicit types
                       allParamsMatch = false;
                       break;
                     }
