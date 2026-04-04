@@ -173,7 +173,14 @@ public class DoStatement extends Statement {
               && !feVar.isUseVar()) {
             VarType iterType = incExprent.get(0).getExprType();
             if (iterType.type == CodeType.OBJECT && iterType.arrayDim == 0) {
-              String typeStr = ExprProcessor.getCastTypeName(feType);
+              // Use the inferred type if it's a generic type variable (e.g., E, T)
+              // instead of the erased bound type (e.g., BaseScriptObject)
+              VarType castElementType = feType;
+              VarType inferredType = feVar.getInferredExprType(null);
+              if (inferredType != null && inferredType.type == CodeType.GENVAR) {
+                castElementType = inferredType;
+              }
+              String typeStr = ExprProcessor.getCastTypeName(castElementType);
               Exprent iterExpr = incExprent.get(0);
               if (iterExpr.getPrecedence() >= FunctionExprent.FunctionType.CAST.precedence) {
                 iterBuf = iterBuf.encloseWithParens();
