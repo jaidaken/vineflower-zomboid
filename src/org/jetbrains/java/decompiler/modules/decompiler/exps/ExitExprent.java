@@ -187,6 +187,22 @@ public class ExitExprent extends Exprent {
               needsReturnCast = true;
             }
           }
+          // Also check: returning a VarExprent whose type doesn't match the return type.
+          // Slot reuse or type inference failures can cause variables to have wrong types.
+          if (!needsReturnCast && value instanceof VarExprent) {
+            VarType exprType = value.getExprType();
+            if (ret.type == CodeType.OBJECT && ret.value != null
+                && !"java/lang/Object".equals(ret.value)) {
+              boolean compatible = exprType.type == CodeType.OBJECT
+                  && exprType.value != null
+                  && (ret.value.equals(exprType.value)
+                      || (DecompilerContext.getStructContext() != null
+                          && DecompilerContext.getStructContext().instanceOf(exprType.value, ret.value)));
+              if (!compatible) {
+                needsReturnCast = true;
+              }
+            }
+          }
           if (needsReturnCast) {
             String rendered = buf.toString();
             int retIdx = rendered.indexOf("return ") + 7;
