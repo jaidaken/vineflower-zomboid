@@ -237,10 +237,8 @@ public class VarExprent extends Exprent implements Pattern {
           DecompilerContext.getImportCollector().ensureImported(fullName);
         }
         String name = ExprProcessor.getCastTypeName(definitionType);
-        // Use 'var' when the declared type conflicts with the bytecode-level type
-        // (e.g., OBJECT declaration but FLOAT bytecode opcode from slot reuse).
-        // Only for initialized declarations (var requires an initializer in Java).
-        boolean typeFamilyConflict = !useVar && !defaultInit
+        // Detect type-family conflict: declared as OBJECT but bytecode opcode says primitive
+        boolean typeFamilyConflict = !useVar
             && bytecodeTypeFamily != null && bytecodeTypeFamily != TypeFamily.UNKNOWN
             && definitionType.typeFamily != bytecodeTypeFamily
             && definitionType.typeFamily == TypeFamily.OBJECT
@@ -249,7 +247,13 @@ public class VarExprent extends Exprent implements Pattern {
         // Use 'Object' for null/unknown types instead of 'var' (var can't be null-initialized)
         if (ExprProcessor.isInvalidTypeName(name) && !isIntersectionType && !useVar && !typeFamilyConflict) {
           buffer.append("Object");
-        } else if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType || useVar || typeFamilyConflict) {
+        } else if (typeFamilyConflict) {
+          // Use the bytecode-level type directly instead of the wrong object type
+          VarType btType = bytecodeTypeFamily == TypeFamily.FLOAT ? VarType.VARTYPE_FLOAT
+              : bytecodeTypeFamily == TypeFamily.DOUBLE ? VarType.VARTYPE_DOUBLE
+              : VarType.VARTYPE_LONG;
+          buffer.appendCastTypeName(btType);
+        } else if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType || useVar) {
           buffer.append("var");
         } else {
           buffer.appendCastTypeName(definitionType);
