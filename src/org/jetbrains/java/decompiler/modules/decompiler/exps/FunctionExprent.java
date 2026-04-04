@@ -714,7 +714,28 @@ public class FunctionExprent extends Exprent {
           }
           buf.append(lstOperands.get(i).toJava(indent));
         }
-        return buf.encloseWithParens().append(wrapOperandString(lstOperands.get(0), true, indent));
+        {
+          TextBuffer castExprBuf = wrapOperandString(lstOperands.get(0), true, indent);
+          // RTF: when the source type is provably incompatible with the cast target,
+          // add an intermediate (Object) cast. This happens when type inference narrows
+          // a variable slot to one specific type but the slot holds other types too.
+          if (DecompilerContext.isRoundtripFidelity() && lstOperands.size() >= 2) {
+            VarType sourceType = lstOperands.get(0).getExprType();
+            VarType targetType = lstOperands.get(1).getExprType();
+            if (sourceType.type == CodeType.OBJECT && targetType.type == CodeType.OBJECT
+                && sourceType.value != null && targetType.value != null
+                && !"java/lang/Object".equals(sourceType.value)
+                && !"java/lang/Object".equals(targetType.value)) {
+              boolean compatible = DecompilerContext.getStructContext() != null
+                  && (DecompilerContext.getStructContext().instanceOf(sourceType.value, targetType.value)
+                      || DecompilerContext.getStructContext().instanceOf(targetType.value, sourceType.value));
+              if (!compatible) {
+                castExprBuf = castExprBuf.enclose("(Object)", "");
+              }
+            }
+          }
+          return buf.encloseWithParens().append(castExprBuf);
+        }
       case ARRAY_LENGTH:
         Exprent arr = lstOperands.get(0);
 
