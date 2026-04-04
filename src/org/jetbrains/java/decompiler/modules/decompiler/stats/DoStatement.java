@@ -4,6 +4,7 @@ package org.jetbrains.java.decompiler.modules.decompiler.stats;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.ConstExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
@@ -160,6 +161,27 @@ public class DoStatement extends Statement {
       case FOR_EACH:
         buf.appendIndent(indent).append("for (").append(initExprent.get(0).toJava(indent));
         incExprent.get(0).getInferredExprType(null); //TODO: Find a better then null? For now just calls it to clear casts if needed
+        // RTF: Fix erased array casts in for-each iterables.
+        // When iterating over (Enum[])getEnumConstants() with loop variable E,
+        // replace the cast type with E[] so the assignment is type-compatible.
+        if (DecompilerContext.isRoundtripFidelity() && initExprent.get(0) instanceof VarExprent) {
+          VarExprent feVarCheck = (VarExprent) initExprent.get(0);
+          VarType feInferred = feVarCheck.getInferredExprType(null);
+          if (feInferred != null && feInferred.type == CodeType.GENVAR) {
+            Exprent iterExpr = incExprent.get(0);
+            if (iterExpr instanceof FunctionExprent
+                && ((FunctionExprent) iterExpr).getFuncType() == FunctionExprent.FunctionType.CAST) {
+              FunctionExprent castFunc = (FunctionExprent) iterExpr;
+              Exprent castTypeExpr = castFunc.getLstOperands().get(1);
+              VarType castType = castTypeExpr.getExprType();
+              if (castType.arrayDim > 0 && castType.type == CodeType.OBJECT) {
+                // Replace the array cast type with E[] by modifying the cast operand
+                castFunc.getLstOperands().set(1, new ConstExprent(
+                    new VarType(feInferred.type, castType.arrayDim, feInferred.value), null, null));
+              }
+            }
+          }
+        }
         TextBuffer iterBuf = incExprent.get(0).toJava(indent);
         // RTF: when the for-each variable type is specific (narrowed from Object)
         // but the iterable is a raw collection, cast the iterable so javac accepts
