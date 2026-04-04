@@ -754,26 +754,47 @@ public class FunctionExprent extends Exprent {
           // ifne;ifeq (first jumps to true, second jumps to false), matching the
           // original bytecode's shared-target pattern.
           Exprent condExpr2 = lstOperands.get(0);
-          if (condExpr2 instanceof FunctionExprent condFunc
-              && condFunc.getFuncType() == FunctionType.BOOLEAN_AND) {
-            List<Exprent> andOps = condFunc.getLstOperands();
-            if (andOps.size() == 2
-                && andOps.get(0) instanceof FunctionExprent f0 && f0.getFuncType() == FunctionType.BOOL_NOT
-                && andOps.get(1) instanceof FunctionExprent f1 && f1.getFuncType() == FunctionType.BOOL_NOT) {
-              // Pattern matches: !a && !b ? X : Y → a || b ? Y : X
-              List<Exprent> orOps = new ArrayList<>();
-              orOps.add(f0.getLstOperands().get(0));  // a (un-negated)
-              orOps.add(f1.getLstOperands().get(0));  // b (un-negated)
-              FunctionExprent orExpr = new FunctionExprent(FunctionType.BOOLEAN_OR, orOps, condFunc.bytecode);
-              condBuf = wrapOperandString(orExpr, true, indent);
-              // Swap ternary branches
-              buf.append(condBuf)
-                .appendPossibleNewline(" ").append("? ")
-                .append(wrapOperandString(lstOperands.get(2), true, indent))  // was Y, now first
-                .appendPossibleNewline(" ").append(": ")
-                .append(wrapOperandString(lstOperands.get(1), true, indent)); // was X, now second
-              buf.popNewlineGroup();
-              return buf;
+          if (condExpr2 instanceof FunctionExprent condFunc) {
+            FunctionType condFuncType = condFunc.getFuncType();
+            // Pattern 1: !a && !b ? X : Y → a || b ? Y : X
+            if (condFuncType == FunctionType.BOOLEAN_AND) {
+              List<Exprent> andOps = condFunc.getLstOperands();
+              if (andOps.size() == 2
+                  && andOps.get(0) instanceof FunctionExprent f0 && f0.getFuncType() == FunctionType.BOOL_NOT
+                  && andOps.get(1) instanceof FunctionExprent f1 && f1.getFuncType() == FunctionType.BOOL_NOT) {
+                List<Exprent> orOps = new ArrayList<>();
+                orOps.add(f0.getLstOperands().get(0));
+                orOps.add(f1.getLstOperands().get(0));
+                FunctionExprent orExpr = new FunctionExprent(FunctionType.BOOLEAN_OR, orOps, condFunc.bytecode);
+                condBuf = wrapOperandString(orExpr, true, indent);
+                buf.append(condBuf)
+                  .appendPossibleNewline(" ").append("? ")
+                  .append(wrapOperandString(lstOperands.get(2), true, indent))
+                  .appendPossibleNewline(" ").append(": ")
+                  .append(wrapOperandString(lstOperands.get(1), true, indent));
+                buf.popNewlineGroup();
+                return buf;
+              }
+            }
+            // Pattern 2: !a || !b ? X : Y → a && b ? Y : X
+            if (condFuncType == FunctionType.BOOLEAN_OR) {
+              List<Exprent> orOps = condFunc.getLstOperands();
+              if (orOps.size() == 2
+                  && orOps.get(0) instanceof FunctionExprent f0 && f0.getFuncType() == FunctionType.BOOL_NOT
+                  && orOps.get(1) instanceof FunctionExprent f1 && f1.getFuncType() == FunctionType.BOOL_NOT) {
+                List<Exprent> andOps = new ArrayList<>();
+                andOps.add(f0.getLstOperands().get(0));
+                andOps.add(f1.getLstOperands().get(0));
+                FunctionExprent andExpr = new FunctionExprent(FunctionType.BOOLEAN_AND, andOps, condFunc.bytecode);
+                condBuf = wrapOperandString(andExpr, true, indent);
+                buf.append(condBuf)
+                  .appendPossibleNewline(" ").append("? ")
+                  .append(wrapOperandString(lstOperands.get(2), true, indent))
+                  .appendPossibleNewline(" ").append(": ")
+                  .append(wrapOperandString(lstOperands.get(1), true, indent));
+                buf.popNewlineGroup();
+                return buf;
+              }
             }
           }
         }
