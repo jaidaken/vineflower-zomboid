@@ -145,12 +145,33 @@ public abstract class SFormsConstructor {
     Set<Integer> conflictSlots = new HashSet<>();
     for (Map.Entry<Integer, Set<Integer>> entry : slotStoreCategories.entrySet()) {
       Set<Integer> cats = entry.getValue();
+      boolean hasInt = cats.contains(0);    // istore
       boolean hasFloat = cats.contains(2);  // fstore
       boolean hasDouble = cats.contains(3); // dstore
       boolean hasObject = cats.contains(4); // astore
-      // Only FLOAT+OBJECT or DOUBLE+OBJECT are true conflicts
+      // FLOAT+OBJECT or DOUBLE+OBJECT: always split
       if ((hasFloat && hasObject) || (hasDouble && hasObject)) {
         conflictSlots.add(entry.getKey());
+      }
+      // INT+OBJECT: split when the slot has BOTH astore (String/Object value) AND
+      // istore (int value) with BOTH aload and iload, AND the method has a switch instruction.
+      // This catches String-switch desugaring where the same slot holds the String
+      // for the switch AND an int for a for-loop counter.
+      // Extra guard: require a lookupswitch or tableswitch somewhere in the method
+      // to avoid splitting boolean/null patterns that also have ISTORE+ASTORE.
+      if (hasInt && hasObject) {
+        int slot = entry.getKey();
+        boolean hasAload = false, hasIload = false, hasSwitch = false;
+        for (int si = 0; si < seq.length(); si++) {
+          Instruction si_instr = seq.getInstr(si);
+          if (si_instr.opcode == CodeConstants.opc_aload && si_instr.operand(0) == slot) hasAload = true;
+          if (si_instr.opcode == CodeConstants.opc_iload && si_instr.operand(0) == slot) hasIload = true;
+          if (si_instr.opcode == CodeConstants.opc_lookupswitch || si_instr.opcode == CodeConstants.opc_tableswitch) hasSwitch = true;
+        }
+        // Only split when all three conditions are met
+        if (hasAload && hasIload && hasSwitch) {
+          conflictSlots.add(slot);
+        }
       }
     }
     if (conflictSlots.isEmpty()) return;
