@@ -8,6 +8,10 @@ import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionNode;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructMethod;
+import org.jetbrains.java.decompiler.code.Instruction;
+import org.jetbrains.java.decompiler.code.InstructionSequence;
+import org.jetbrains.java.decompiler.main.DecompilerContext;
+import org.jetbrains.java.decompiler.main.collectors.CounterContainer;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
 import org.jetbrains.java.decompiler.util.DotExporter;
@@ -74,6 +78,11 @@ public abstract class SFormsConstructor {
     ValidationHelper.validateDGraph(dgraph, root);
     ValidationHelper.validateVars(dgraph, root, var -> var.getVersion() == 0, "Var version is not zero");
 
+    // Pre-split local variable slots that hold different JVM types.
+    // Scans raw bytecode to find slots where both FSTORE and ASTORE (or other
+    // incompatible store opcodes) are used, then renames the minority VarExprents.
+    preSplitIncompatibleSlots(dgraph, mt);
+
     // FIXME: this overrides the previous iteration
     DotExporter.toDotFile(dgraph, mt, "ssaSplitVariables");
 
@@ -95,6 +104,146 @@ public abstract class SFormsConstructor {
       // System.out.println("~~~~~~~~~~~~~ \r\n"+root.toJava());
     }
     while (!updated.isEmpty());
+  }
+
+  /**
+   * Scan raw bytecode to find slots where different store opcodes are used
+   * (e.g., FSTORE and ASTORE to the same slot). These slots hold different
+   * JVM types and must be split into separate variables before SSA.
+   *
+   * Only splits when the store opcodes use truly different JVM type categories:
+   * - ISTORE (int/byte/short/char/boolean) vs FSTORE (float) vs ASTORE (Object) vs LSTORE (long) vs DSTORE (double)
+   * ISTORE covers all integer-like types including boolean, so no false splits there.
+   */
+  private static void preSplitIncompatibleSlots(DirectGraph dgraph, StructMethod mt) {
+    InstructionSequence seq = mt.getInstructionSequence();
+    if (seq == null) return;
+
+    // Phase 1: Scan bytecode for store opcodes per slot
+    // Map slot → set of store opcode categories (0=istore, 1=lstore, 2=fstore, 3=dstore, 4=astore)
+    Map<Integer, Set<Integer>> slotStoreCategories = new HashMap<>();
+    for (int i = 0; i < seq.length(); i++) {
+      Instruction instr = seq.getInstr(i);
+      int category = -1;
+      switch (instr.opcode) {
+        case CodeConstants.opc_istore: category = 0; break;
+        case CodeConstants.opc_lstore: category = 1; break;
+        case CodeConstants.opc_fstore: category = 2; break;
+        case CodeConstants.opc_dstore: category = 3; break;
+        case CodeConstants.opc_astore: category = 4; break;
+      }
+      if (category >= 0) {
+        int slot = instr.operand(0);
+        slotStoreCategories.computeIfAbsent(slot, k -> new HashSet<>()).add(category);
+      }
+    }
+
+    // Phase 2: Find slots with truly incompatible store categories.
+    // Only split when FLOAT (2) coexists with OBJECT (4), or DOUBLE (3) with OBJECT (4).
+    // ISTORE (0) is compatible with everything (null/boolean patterns use astore then istore).
+    Set<Integer> conflictSlots = new HashSet<>();
+    for (Map.Entry<Integer, Set<Integer>> entry : slotStoreCategories.entrySet()) {
+      Set<Integer> cats = entry.getValue();
+      boolean hasFloat = cats.contains(2);  // fstore
+      boolean hasDouble = cats.contains(3); // dstore
+      boolean hasObject = cats.contains(4); // astore
+      // Only FLOAT+OBJECT or DOUBLE+OBJECT are true conflicts
+      if ((hasFloat && hasObject) || (hasDouble && hasObject)) {
+        conflictSlots.add(entry.getKey());
+      }
+    }
+    if (conflictSlots.isEmpty()) return;
+
+    // Phase 3: For each conflicting slot, find the majority store category
+    // and rename VarExprents of minority categories to new indices
+    Map<Integer, Integer> slotMajorityCategory = new HashMap<>();
+    for (int slot : conflictSlots) {
+      // Count VarExprents per category in the graph
+      Map<Integer, Integer> categoryCounts = new HashMap<>();
+
+      // Determine category from store opcodes: category 0=int(istore), 2=float(fstore), 4=object(astore)
+      // For reads (iload/fload/aload), use the read opcode category
+      // Since we can't easily map VarExprents back to specific bytecode offsets,
+      // use the VarExprent's type to determine which category it belongs to
+      // VarExprent types at this stage are from construction: INT, FLOAT, OBJECT, etc.
+      slotMajorityCategory.put(slot, -1); // will be set below
+    }
+
+    // Collect VarExprents per slot and determine categories from their types
+    Map<Integer, Map<Integer, List<VarExprent>>> slotCategoryVars = new HashMap<>();
+    dgraph.iterateExprents(exprent -> {
+      List<Exprent> lst = exprent.getAllExprents(true);
+      lst.add(exprent);
+      for (Exprent expr : lst) {
+        if (expr instanceof VarExprent) {
+          VarExprent var = (VarExprent) expr;
+          int idx = var.getIndex();
+          if (!conflictSlots.contains(idx)) continue;
+          // Map VarExprent type to store category
+          int cat = varTypeToStoreCategory(var);
+          if (cat >= 0) {
+            slotCategoryVars.computeIfAbsent(idx, k -> new HashMap<>())
+                            .computeIfAbsent(cat, k -> new ArrayList<>()).add(var);
+          }
+        }
+      }
+      return 0;
+    });
+
+    // Phase 4: For each conflicting slot, keep majority category, rename others
+    CounterContainer counters = DecompilerContext.getCounterContainer();
+    for (int slot : conflictSlots) {
+      Map<Integer, List<VarExprent>> categoryVars = slotCategoryVars.get(slot);
+      if (categoryVars == null || categoryVars.size() <= 1) continue;
+
+      // Find majority category
+      int majorCat = -1;
+      int maxCount = 0;
+      for (Map.Entry<Integer, List<VarExprent>> e : categoryVars.entrySet()) {
+        if (e.getValue().size() > maxCount) {
+          maxCount = e.getValue().size();
+          majorCat = e.getKey();
+        }
+      }
+
+      // Rename minority categories
+      for (Map.Entry<Integer, List<VarExprent>> e : categoryVars.entrySet()) {
+        if (e.getKey() == majorCat) continue;
+        int newIdx = counters.getCounterAndIncrement(CounterContainer.VAR_COUNTER);
+        for (VarExprent var : e.getValue()) {
+          var.setIndex(newIdx);
+        }
+      }
+    }
+  }
+
+  /**
+   * Map a VarExprent's current type to a store category (matching bytecode store opcodes).
+   * Returns: 0=istore, 1=lstore, 2=fstore, 3=dstore, 4=astore, -1=unknown
+   */
+  private static int varTypeToStoreCategory(VarExprent var) {
+    if (var.getVarType() == null) return -1;
+    switch (var.getVarType().type) {
+      case BOOLEAN:
+      case BYTE:
+      case BYTECHAR:
+      case SHORTCHAR:
+      case SHORT:
+      case CHAR:
+      case INT:
+        return 0; // istore
+      case LONG:
+        return 1; // lstore
+      case FLOAT:
+        return 2; // fstore
+      case DOUBLE:
+        return 3; // dstore
+      case OBJECT:
+      case NULL:
+        return 4; // astore
+      default:
+        return -1;
+    }
   }
 
   void ssaStatements(DirectGraph dgraph, Set<String> updated, boolean calcLiveVars, StructMethod mt, int iteration) {
