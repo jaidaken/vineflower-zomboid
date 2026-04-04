@@ -147,6 +147,22 @@ public class AssignmentExprent extends Exprent {
 
     TextBuffer buffer = new TextBuffer();
 
+    // Fix boolean/int type conflict: when declaring a boolean variable but
+    // assigning an int constant (0 or 1), widen the declaration to int.
+    // This fixes "int cannot be converted to boolean" when the variable is
+    // narrowed to boolean from ICONST_0/1 but used as int elsewhere.
+    if (left instanceof VarExprent && ((VarExprent) left).isDefinition()
+        && leftType.equals(VarType.VARTYPE_BOOLEAN)
+        && right instanceof ConstExprent) {
+      ConstExprent constRight = (ConstExprent) right;
+      if (constRight.getConstType().typeFamily == TypeFamily.INTEGER
+          || (constRight.getConstType().equals(VarType.VARTYPE_BOOLEAN)
+              && constRight.getValue() instanceof Integer)) {
+        // Widen to int - use 'var' to let javac infer from the literal
+        ((VarExprent) left).setUseVar(true);
+      }
+    }
+
     if (fieldInClassInit) {
       FieldExprent field = (FieldExprent) left;
       buffer.appendField(field.getName(), false, field.getClassname(), field.getName(), field.getDescriptor());
