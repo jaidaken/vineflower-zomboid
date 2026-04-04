@@ -14,6 +14,7 @@ import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.collectors.CounterContainer;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.util.DotExporter;
 import org.jetbrains.java.decompiler.util.InterpreterUtil;
 import org.jetbrains.java.decompiler.util.collections.FastSparseSetFactory;
@@ -169,7 +170,7 @@ public abstract class SFormsConstructor {
       slotMajorityCategory.put(slot, -1); // will be set below
     }
 
-    // Collect VarExprents per slot and determine categories from their types
+    // Collect VarExprents per slot and determine categories from their immutable bytecodeTypeFamily
     Map<Integer, Map<Integer, List<VarExprent>>> slotCategoryVars = new HashMap<>();
     dgraph.iterateExprents(exprent -> {
       List<Exprent> lst = exprent.getAllExprents(true);
@@ -179,8 +180,8 @@ public abstract class SFormsConstructor {
           VarExprent var = (VarExprent) expr;
           int idx = var.getIndex();
           if (!conflictSlots.contains(idx)) continue;
-          // Map VarExprent type to store category
-          int cat = varTypeToStoreCategory(var);
+          // Use the immutable bytecodeTypeFamily from construction
+          int cat = typeFamilyToStoreCategory(var.getBytecodeTypeFamily());
           if (cat >= 0) {
             slotCategoryVars.computeIfAbsent(idx, k -> new HashMap<>())
                             .computeIfAbsent(cat, k -> new ArrayList<>()).add(var);
@@ -218,19 +219,14 @@ public abstract class SFormsConstructor {
   }
 
   /**
-   * Map a VarExprent's current type to a store category (matching bytecode store opcodes).
+   * Map a TypeFamily to a store category (matching bytecode store opcodes).
    * Returns: 0=istore, 1=lstore, 2=fstore, 3=dstore, 4=astore, -1=unknown
    */
-  private static int varTypeToStoreCategory(VarExprent var) {
-    if (var.getVarType() == null) return -1;
-    switch (var.getVarType().type) {
+  private static int typeFamilyToStoreCategory(TypeFamily family) {
+    if (family == null) return -1;
+    switch (family) {
       case BOOLEAN:
-      case BYTE:
-      case BYTECHAR:
-      case SHORTCHAR:
-      case SHORT:
-      case CHAR:
-      case INT:
+      case INTEGER:
         return 0; // istore
       case LONG:
         return 1; // lstore
@@ -239,7 +235,6 @@ public abstract class SFormsConstructor {
       case DOUBLE:
         return 3; // dstore
       case OBJECT:
-      case NULL:
         return 4; // astore
       default:
         return -1;

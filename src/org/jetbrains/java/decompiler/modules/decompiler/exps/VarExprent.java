@@ -24,6 +24,7 @@ import org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribu
 import org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTypeTableAttribute;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericFieldDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericMain;
@@ -47,6 +48,10 @@ public class VarExprent extends Exprent implements Pattern {
 
   private int index;
   private VarType varType;
+  // JVM-level type family from bytecode opcode (ISTORE→INTEGER, FSTORE→FLOAT, ASTORE→OBJECT).
+  // Set during construction, preserved through copy(), never overwritten by type inference.
+  // Used by pre-split logic to detect incompatible slot reuse.
+  private TypeFamily bytecodeTypeFamily;
   private boolean definition = false;
   private final VarProcessor processor;
   private int version = 0;
@@ -71,6 +76,7 @@ public class VarExprent extends Exprent implements Pattern {
     super(Type.VAR);
     this.index = index;
     this.varType = varType;
+    this.bytecodeTypeFamily = varType != null ? varType.typeFamily : TypeFamily.UNKNOWN;
     this.processor = processor;
     this.addBytecodeOffsets(bytecode);
   }
@@ -191,6 +197,7 @@ public class VarExprent extends Exprent implements Pattern {
   @Override
   public Exprent copy() {
     VarExprent var = new VarExprent(index, getVarType(), processor, bytecode);
+    var.overrideBytecodeTypeFamily(bytecodeTypeFamily); // preserve original JVM type
     var.setDefinition(definition);
     var.setVersion(version);
     var.setClassDef(classDef);
@@ -588,6 +595,16 @@ public class VarExprent extends Exprent implements Pattern {
 
   public void setBackingInstr(Instruction backing) {
     this.backing = backing;
+  }
+
+  /** Returns the JVM-level type family from the original bytecode store opcode. */
+  public TypeFamily getBytecodeTypeFamily() {
+    return bytecodeTypeFamily;
+  }
+
+  /** Override bytecodeTypeFamily during copy to preserve the original value. */
+  void overrideBytecodeTypeFamily(TypeFamily family) {
+    this.bytecodeTypeFamily = family;
   }
 
   public void setLVT(LocalVariable var) {
