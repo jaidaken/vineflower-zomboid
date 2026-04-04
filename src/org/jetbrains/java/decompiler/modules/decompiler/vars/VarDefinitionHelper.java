@@ -1482,9 +1482,25 @@ public class VarDefinitionHelper {
               }
               // Don't merge variables with incompatible type families.
               // This prevents re-merging float and Object variables that were
-              // pre-split by SFormsConstructor.preSplitIncompatibleSlots.
+              // pre-split by SFormsConstructor.preSplitIncompatibleSlots,
+              // and prevents merging String/Object vars with int/float vars.
               VarType fromType = varproc.getVarType(from);
               VarType toType = varproc.getVarType(to);
+              // Also try getting type from the VarExprent itself if processor type is null
+              if (fromType == null) fromType = var.getVarType();
+              if (toType == null) {
+                // Find the existing variable's VarExprent to get its type
+                // by searching varDefinitions for the 'to' pair
+                for (Exprent vd : stat.getVarDefinitions()) {
+                  if (vd instanceof VarExprent) {
+                    VarExprent vdv = (VarExprent) vd;
+                    if (vdv.getIndex() == to.var && vdv.getVersion() == to.version) {
+                      toType = vdv.getVarType();
+                      break;
+                    }
+                  }
+                }
+              }
               if (fromType != null && toType != null) {
                 TypeFamily ff = fromType.typeFamily;
                 TypeFamily tf = toType.typeFamily;
