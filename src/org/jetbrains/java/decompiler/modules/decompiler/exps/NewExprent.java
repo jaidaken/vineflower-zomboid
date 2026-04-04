@@ -524,6 +524,8 @@ public class NewExprent extends Exprent {
           if (i < lstDims.size()) {
             if (lstDims.get(i).type == Type.CONST) {
               ((ConstExprent)lstDims.get(i)).adjustConstType(VarType.VARTYPE_INT);
+              // Array dimensions must be int - force boolean constants to int
+              ((ConstExprent)lstDims.get(i)).forceBooleanToInt();
             }
             buf.append(lstDims.get(i).toJava(indent));
           }

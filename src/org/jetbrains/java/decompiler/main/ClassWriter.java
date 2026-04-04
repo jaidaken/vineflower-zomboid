@@ -1970,7 +1970,9 @@ public class ClassWriter implements StatementWriter {
       for (StructMethod method : methods) {
         // Match against name, descriptor, and whether or not the found method is static.
         // TODO: We are not handling generics or superclass parameters and return types
-        if (md.equals(MethodDescriptor.parseDescriptor(method.getDescriptor())) && name.equals(method.getName()) && !method.hasModifier(CodeConstants.ACC_STATIC)) {
+        // Match name, descriptor, non-static, and non-private (private methods can't be overridden)
+        if (md.equals(MethodDescriptor.parseDescriptor(method.getDescriptor())) && name.equals(method.getName())
+            && !method.hasModifier(CodeConstants.ACC_STATIC) && !method.hasModifier(CodeConstants.ACC_PRIVATE)) {
           return true;
         }
       }
