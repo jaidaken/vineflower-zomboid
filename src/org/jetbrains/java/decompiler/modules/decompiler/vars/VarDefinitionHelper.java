@@ -1479,6 +1479,23 @@ public class VarDefinitionHelper {
               if (denied != null && denied.equals(to)) {
                 continue; // skip - this merge was already tried and failed
               }
+              // Don't merge variables with incompatible type families.
+              // This prevents re-merging float and Object variables that were
+              // pre-split by SFormsConstructor.preSplitIncompatibleSlots.
+              VarType fromType = varproc.getVarType(from);
+              VarType toType = varproc.getVarType(to);
+              if (fromType != null && toType != null) {
+                TypeFamily ff = fromType.typeFamily;
+                TypeFamily tf = toType.typeFamily;
+                if (ff != tf) {
+                  // BOOLEAN and INTEGER are compatible
+                  boolean compatible = (ff == TypeFamily.BOOLEAN && tf == TypeFamily.INTEGER)
+                      || (ff == TypeFamily.INTEGER && tf == TypeFamily.BOOLEAN);
+                  if (!compatible) {
+                    continue; // skip - incompatible type families
+                  }
+                }
+              }
               // Don't eagerly remove from varDefinitions - let the merge loop
               // handle cleanup after confirming the remap succeeds.
               return new VPPEntry(var, to);
