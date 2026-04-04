@@ -196,6 +196,7 @@ public class VarExprent extends Exprent implements Pattern {
     var.setClassDef(classDef);
     var.setStack(stack);
     var.setLVT(lvt);
+    var.setBackingInstr(backing);
     var.setEffectivelyFinal(isEffectivelyFinal);
     var.setDefaultInit(defaultInit);
     var.setUseVar(useVar);
