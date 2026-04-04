@@ -118,6 +118,12 @@ public final class ExitHelper {
           StatEdge ifedge = ifst.getIfEdge();
           dest = isExitEdge(ifedge);
           if (dest != null) {
+            // RTF: don't inline return across try-catch boundary
+            if (DecompilerContext.isRoundtripFidelity() && rtfContainsGotoExitsTryBody(ifst)) {
+              dest = null;
+            }
+          }
+          if (dest != null) {
             BasicBlockStatement bstat = BasicBlockStatement.create();
             bstat.setExprents(DecHelper.copyExprentList(dest.getExprents()));
 
