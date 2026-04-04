@@ -238,8 +238,9 @@ public class VarExprent extends Exprent implements Pattern {
         }
         String name = ExprProcessor.getCastTypeName(definitionType);
         // Use 'var' when the declared type conflicts with the bytecode-level type
-        // (e.g., OBJECT declaration but FLOAT bytecode opcode from slot reuse)
-        boolean typeFamilyConflict = !useVar
+        // (e.g., OBJECT declaration but FLOAT bytecode opcode from slot reuse).
+        // Only for initialized declarations (var requires an initializer in Java).
+        boolean typeFamilyConflict = !useVar && !defaultInit
             && bytecodeTypeFamily != null && bytecodeTypeFamily != TypeFamily.UNKNOWN
             && definitionType.typeFamily != bytecodeTypeFamily
             && definitionType.typeFamily == TypeFamily.OBJECT
