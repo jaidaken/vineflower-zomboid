@@ -237,10 +237,18 @@ public class VarExprent extends Exprent implements Pattern {
           DecompilerContext.getImportCollector().ensureImported(fullName);
         }
         String name = ExprProcessor.getCastTypeName(definitionType);
+        // Use 'var' when the declared type conflicts with the bytecode-level type
+        // (e.g., OBJECT declaration but FLOAT bytecode opcode from slot reuse)
+        boolean typeFamilyConflict = !useVar
+            && bytecodeTypeFamily != null && bytecodeTypeFamily != TypeFamily.UNKNOWN
+            && definitionType.typeFamily != bytecodeTypeFamily
+            && definitionType.typeFamily == TypeFamily.OBJECT
+            && (bytecodeTypeFamily == TypeFamily.FLOAT || bytecodeTypeFamily == TypeFamily.DOUBLE
+                || bytecodeTypeFamily == TypeFamily.LONG);
         // Use 'Object' for null/unknown types instead of 'var' (var can't be null-initialized)
-        if (ExprProcessor.isInvalidTypeName(name) && !isIntersectionType && !useVar) {
+        if (ExprProcessor.isInvalidTypeName(name) && !isIntersectionType && !useVar && !typeFamilyConflict) {
           buffer.append("Object");
-        } else if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType || useVar) {
+        } else if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType || useVar || typeFamilyConflict) {
           buffer.append("var");
         } else {
           buffer.appendCastTypeName(definitionType);
