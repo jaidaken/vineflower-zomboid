@@ -34,6 +34,11 @@ public class BasicBlock implements IGraphNode {
   // return instruction (guard clause pattern: ifXX + return).
   public boolean rtfFallthroughWasReturn = false;
 
+  // RTF: set when this block's goto exits an exception-protected range
+  // (try body). The goto target is outside the try, meaning the return
+  // after the catch was originally separate (not inlined).
+  public boolean rtfGotoExitsTryBody = false;
+
   // *****************************************************************************
   // private fields
   // *****************************************************************************

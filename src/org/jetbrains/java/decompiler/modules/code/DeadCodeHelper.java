@@ -252,6 +252,13 @@ public final class DeadCodeHelper {
           int targetOffset = target.getInstrOldOffsets().isEmpty() ? -1 : target.getInstrOldOffsets().get(0);
           if (targetOffset > gotoOffset) {
             block.rtfHadTrailingGoto = true;
+            // Check if goto exits an exception-protected range (try body exit)
+            for (ExceptionRangeCFG range : graph.getExceptions()) {
+              if (range.getProtectedRange().contains(block) && !range.getProtectedRange().contains(target)) {
+                block.rtfGotoExitsTryBody = true;
+                break;
+              }
+            }
           }
         }
 

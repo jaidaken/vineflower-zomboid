@@ -30,6 +30,10 @@ public class CatchStatement extends Statement {
   private final List<VarExprent> vars = new ArrayList<>();
   private final List<Exprent> resources = new ArrayList<>();
 
+  // RTF: true when the try body originally ended with a goto that exited
+  // the exception-protected range (return was outside the try block).
+  private boolean rtfTryBodyEndedWithGoto = false;
+
   // *****************************************************************************
   // constructors
   // *****************************************************************************
@@ -61,6 +65,25 @@ public class CatchStatement extends Statement {
     if (next != null) {
       post = next;
     }
+
+    // RTF: detect if the try body had a goto that exits the exception range.
+    // Walk ALL BasicBlocks in head looking for rtfGotoExitsTryBody.
+    if (DecompilerContext.isRoundtripFidelity()) {
+      rtfTryBodyEndedWithGoto = rtfCheckGotoExitsTryBody(head);
+    }
+  }
+
+  private static boolean rtfCheckGotoExitsTryBody(Statement stat) {
+    // Search ALL BasicBlocks in the try body for the flag.
+    // The block that had the try-exit goto may have been restructured
+    // into any position in the statement tree.
+    if (stat instanceof BasicBlockStatement bbs) {
+      return bbs.getBlock().rtfGotoExitsTryBody;
+    }
+    for (Statement child : stat.getStats()) {
+      if (rtfCheckGotoExitsTryBody(child)) return true;
+    }
+    return false;
   }
 
   // *****************************************************************************
@@ -167,6 +190,12 @@ public class CatchStatement extends Statement {
       buf.append(") {").appendLineSeparator();
     }
 
+    // RTF: extract trailing return when original had a goto exiting the try body
+    org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent rtfExtractedReturn = null;
+    if (rtfTryBodyEndedWithGoto && resources.isEmpty()) {
+      rtfExtractedReturn = rtfExtractTrailingReturn();
+    }
+
     buf.append(ExprProcessor.jmpWrapper(first, indent + 1, true));
     buf.appendIndent(indent).append("}");
 
@@ -232,7 +261,41 @@ public class CatchStatement extends Statement {
     }
     buf.appendLineSeparator();
 
+    if (rtfExtractedReturn != null) {
+      buf.appendIndent(indent).append(rtfExtractedReturn.toJava(indent)).append(";").appendLineSeparator();
+    }
+
     return buf;
+  }
+
+  private org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent rtfExtractTrailingReturn() {
+    Statement last = first;
+    while (last instanceof SequenceStatement) {
+      List<Statement> ch = last.getStats();
+      if (ch.isEmpty()) return null;
+      last = ch.get(ch.size() - 1);
+    }
+    if (!(last instanceof BasicBlockStatement)) return null;
+    List<Exprent> exprents = last.getExprents();
+    if (exprents == null || exprents.size() < 2) return null;
+    Exprent lastExpr = exprents.get(exprents.size() - 1);
+    if (!(lastExpr instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent exit)) return null;
+    if (exit.getExitType() != org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent.Type.RETURN) return null;
+
+    // Only extract constant returns or void returns.
+    // Variable returns would be out of scope after the catch block.
+    if (exit.getValue() != null
+        && !(exit.getValue() instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.ConstExprent)) return null;
+
+    // Safety: don't extract if code follows the try-catch in the parent
+    Statement parent = this.getParent();
+    if (parent instanceof SequenceStatement seq) {
+      int myIdx = seq.getStats().getIndexByKey(this.id);
+      if (myIdx >= 0 && myIdx < seq.getStats().size() - 1) return null;
+    }
+
+    exprents.remove(exprents.size() - 1);
+    return exit;
   }
 
   /**
