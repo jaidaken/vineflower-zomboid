@@ -433,6 +433,7 @@ public class VarDefinitionHelper {
     propogateLVTs(root);
     setNonFinal(root, new HashSet<>());
     remapClashingNames(root, mt);
+    scopeSwitchCasesWithClashingVarDefs(root);
   }
 
 
@@ -2389,6 +2390,81 @@ public class VarDefinitionHelper {
   //      will lead to better looking code. This is the bulk of the logic in iterateClashingExprent.
   // 3.1) Recursion on if statements is incredibly tricky. We need to take extra care to ensure that the head statement iterates *first*
   //      and that the else branch has a context clear of the if branch. This is because the if and the else branch are independent and should not share variable names.
+  /**
+   * Post-pass: find switch statements where different case bodies define variables with
+   * the same name (e.g., multiple for-loops using "int n = 0"). Scope those cases with
+   * {} braces to prevent "variable already defined" compilation errors.
+   */
+  private static void scopeSwitchCasesWithClashingVarDefs(Statement root) {
+    Deque<Statement> stack = new ArrayDeque<>();
+    stack.add(root);
+
+    while (!stack.isEmpty()) {
+      Statement stat = stack.removeFirst();
+      stack.addAll(stat.getStats());
+
+      if (!(stat instanceof SwitchStatement)) continue;
+      SwitchStatement switchStat = (SwitchStatement) stat;
+
+      // Collect defined variable names per case
+      Map<Statement, Set<String>> caseVarNames = new HashMap<>();
+      for (Statement caseStat : switchStat.getCaseStatements()) {
+        Set<String> names = new HashSet<>();
+        collectDefinedVarNames(caseStat, names);
+        if (!names.isEmpty()) {
+          caseVarNames.put(caseStat, names);
+        }
+      }
+
+      // Find cases with overlapping names and scope them
+      List<Statement> cases = new ArrayList<>(caseVarNames.keySet());
+      for (int i = 0; i < cases.size(); i++) {
+        for (int j = i + 1; j < cases.size(); j++) {
+          Set<String> namesI = caseVarNames.get(cases.get(i));
+          Set<String> namesJ = caseVarNames.get(cases.get(j));
+          Set<String> overlap = new HashSet<>(namesI);
+          overlap.retainAll(namesJ);
+          if (!overlap.isEmpty()) {
+            switchStat.scopeCaseStatement(cases.get(i));
+            switchStat.scopeCaseStatement(cases.get(j));
+          }
+        }
+      }
+    }
+  }
+
+  private static void collectDefinedVarNames(Statement stat, Set<String> names) {
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        collectDefinedVarNamesFromExprent(expr, names);
+      }
+    }
+    for (Object obj : stat.getSequentialObjects()) {
+      if (obj instanceof Statement) {
+        collectDefinedVarNames((Statement) obj, names);
+      } else if (obj instanceof Exprent) {
+        collectDefinedVarNamesFromExprent((Exprent) obj, names);
+      }
+    }
+    for (Statement child : stat.getStats()) {
+      collectDefinedVarNames(child, names);
+    }
+  }
+
+  private static void collectDefinedVarNamesFromExprent(Exprent expr, Set<String> names) {
+    for (Exprent sub : expr.getAllExprents(true)) {
+      if (sub instanceof VarExprent) {
+        VarExprent var = (VarExprent) sub;
+        if (var.isDefinition()) {
+          names.add(var.getName());
+        }
+      }
+    }
+    if (expr instanceof VarExprent && ((VarExprent) expr).isDefinition()) {
+      names.add(((VarExprent) expr).getName());
+    }
+  }
+
   public void remapClashingNames(Statement root, StructMethod mt) {
     Map<Statement, Set<VarInMethod>> varDefinitions = new HashMap<>();
     Set<VarInMethod> liveVarDefs = new HashSet<>();
