@@ -302,7 +302,8 @@ public class ConstExprent extends Exprent {
         return buf.append(trimFloat(Float.toString(floatVal), floatVal)).append('F');
 
       case DOUBLE:
-        double doubleVal = (Double)value;
+        // Handle Float value when constType was widened from FLOAT to DOUBLE (for Double boxing)
+        double doubleVal = value instanceof Float ? ((Float)value).doubleValue() : (Double)value;
         if (!literal) {
           if (Double.isNaN(doubleVal)) {
             return buf.append(new FieldExprent("NaN", "java/lang/Double", true, null, FieldDescriptor.DOUBLE_DESCRIPTOR, bytecode).toJava(0));
@@ -313,8 +314,9 @@ public class ConstExprent extends Exprent {
 
           // Try to convert the double representation of the value to the float representation, to output the cleanest version of the value.
           // This patch is based on work in ForgeFlower submitted by Pokechu22.
+          // RTF: skip float shortening in RTF mode - float literals can't auto-box to Double.
           float floatRepresentation = (float) doubleVal;
-          if (floatRepresentation == doubleVal) {
+          if (!DecompilerContext.isRoundtripFidelity() && floatRepresentation == doubleVal) {
             if (trimFloat(Float.toString(floatRepresentation), floatRepresentation).length() < trimDouble(Double.toString(doubleVal), doubleVal).length()) {
               // Check the uninlined values to see if we have one of those
               if (UNINLINED_FLOATS.containsKey(floatRepresentation)) {
@@ -622,6 +624,15 @@ public class ConstExprent extends Exprent {
     else if ((expectedType.equals(VarType.VARTYPE_INT) || expectedType.equals(VarType.VARTYPE_INTEGER)) &&
             constType.typeFamily == TypeFamily.INTEGER) {
       setConstType(VarType.VARTYPE_INT);
+    }
+    // FLOAT => DOUBLE when expected type is Double (boxed) or double (primitive).
+    // Java can't auto-widen float to Double (boxed) in one step: float→double→Double.
+    // Rendering the constant as double lets Java auto-box: double→Double.
+    else if ((expectedType.equals(VarType.VARTYPE_DOUBLE)
+              || expectedType.typeFamily == TypeFamily.DOUBLE
+              || (expectedType.type == CodeType.OBJECT && "java/lang/Double".equals(expectedType.value)))
+            && constType.typeFamily == TypeFamily.FLOAT) {
+      setConstType(VarType.VARTYPE_DOUBLE);
     }
     // BOOLEAN => INT only via explicit request (not through generic adjustConstType)
   }
