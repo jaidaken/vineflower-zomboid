@@ -150,6 +150,13 @@ public final class ExitHelper {
         StatEdge destedge = stat.getAllSuccessorEdges().get(0);
         dest = isExitEdge(destedge);
         if (dest != null) {
+          // RTF: don't inline return into a try body when the original had a goto
+          // exiting the exception range. The return should stay outside the try.
+          if (DecompilerContext.isRoundtripFidelity() && rtfContainsGotoExitsTryBody(stat)) {
+            dest = null;
+          }
+        }
+        if (dest != null) {
           stat.removeSuccessor(destedge);
 
           BasicBlockStatement bstat = BasicBlockStatement.create();
@@ -261,6 +268,19 @@ public final class ExitHelper {
     }
 
     return null;
+  }
+
+  /**
+   * RTF: check if any BasicBlock in the statement has rtfGotoExitsTryBody set.
+   */
+  private static boolean rtfContainsGotoExitsTryBody(Statement stat) {
+    if (stat instanceof BasicBlockStatement bbs) {
+      return bbs.getBlock().rtfGotoExitsTryBody;
+    }
+    for (Statement child : stat.getStats()) {
+      if (rtfContainsGotoExitsTryBody(child)) return true;
+    }
+    return false;
   }
 
   private static boolean isOnlyEdge(StatEdge edge) {

@@ -280,6 +280,13 @@ public final class DeadCodeHelper {
             }
           }
         }
+        // Propagate rtfGotoExitsTryBody from empty blocks to their predecessors
+        if (block.getSeq().isEmpty() && block.rtfGotoExitsTryBody) {
+          for (BasicBlock pred : block.getPreds()) {
+            pred.rtfGotoExitsTryBody = true;
+          }
+        }
+
         // Tag when fall-through from conditional branch is a single return
         if (block.getSeq().length() == 1) {
           Instruction insn = block.getSeq().getInstr(0);

@@ -275,6 +275,18 @@ public class CatchStatement extends Statement {
       if (ch.isEmpty()) return null;
       last = ch.get(ch.size() - 1);
     }
+    // Walk deeper: if last is an IfStatement, find the return in its branches
+    while (last instanceof IfStatement ifSt) {
+      Statement branch = ifSt.getElsestat() != null ? ifSt.getElsestat() : ifSt.getIfstat();
+      if (branch == null) return null;
+      last = branch;
+      while (last instanceof SequenceStatement) {
+        List<Statement> sc = last.getStats();
+        if (sc.isEmpty()) return null;
+        last = sc.get(sc.size() - 1);
+      }
+    }
+
     if (!(last instanceof BasicBlockStatement)) return null;
     List<Exprent> exprents = last.getExprents();
     if (exprents == null || exprents.size() < 2) return null;
@@ -283,7 +295,6 @@ public class CatchStatement extends Statement {
     if (exit.getExitType() != org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent.Type.RETURN) return null;
 
     // Only extract constant returns or void returns.
-    // Variable returns would be out of scope after the catch block.
     if (exit.getValue() != null
         && !(exit.getValue() instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.ConstExprent)) return null;
 
