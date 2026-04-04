@@ -291,6 +291,43 @@ public class VarVersionsProcessor {
       return 0;
     });
 
+    // Safety net: remap any VarExprent still having version > 0.
+    // These are variables whose type inference failed (not in mapExprentMinTypes).
+    // Without remapping, they produce undeclared "var{N}_{V}" names.
+    graph.iterateExprents(exprent -> {
+      List<Exprent> lst = exprent.getAllExprents(true);
+      lst.add(exprent);
+
+      for (Exprent expr : lst) {
+        if (expr instanceof VarExprent) {
+          VarExprent var = (VarExprent) expr;
+          if (var.getVersion() > 0) {
+            VarVersionPair oldPair = new VarVersionPair(var);
+            // Check if already remapped (shouldn't be, but guard)
+            if (!mapVarPaar.containsKey(oldPair)) {
+              int newIndex = counters.getCounterAndIncrement(CounterContainer.VAR_COUNTER);
+              mapVarPaar.put(oldPair, newIndex);
+              mapOriginalVarIndices.put(newIndex, oldPair);
+              // Use the expression's current type or Object as fallback
+              VarType varType = var.getVarType();
+              if (varType == null || varType.equals(VarType.VARTYPE_UNKNOWN)) {
+                varType = VarType.VARTYPE_OBJECT;
+              }
+              mapExprentMinTypes.put(new VarVersionPair(newIndex, 0), varType);
+              mapExprentMaxTypes.put(new VarVersionPair(newIndex, 0), varType);
+            }
+            Integer newIdx = mapVarPaar.get(oldPair);
+            if (newIdx != null) {
+              var.setIndex(newIdx);
+              var.setVersion(0);
+            }
+          }
+        }
+      }
+
+      return 0;
+    });
+
     if (previousVersionsProcessor != null) {
       Map<Integer, VarVersionPair> oldIndices = previousVersionsProcessor.getMapOriginalVarIndices();
       this.mapOriginalVarIndices = new HashMap<>(mapOriginalVarIndices.size());

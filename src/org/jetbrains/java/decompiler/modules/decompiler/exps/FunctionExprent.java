@@ -586,8 +586,11 @@ public class FunctionExprent extends Exprent {
         // Failing that, check the left hand side and then do the same.
         if (right instanceof ConstExprent) {
           ((ConstExprent) right).adjustConstType(left.getExprType());
+          // Boolean constants in arithmetic context are always wrong (Java forbids boolean in math)
+          ((ConstExprent) right).forceBooleanToInt();
         } else if (left instanceof ConstExprent) {
           ((ConstExprent) left).adjustConstType(right.getExprType());
+          ((ConstExprent) left).forceBooleanToInt();
         }
       }
 
@@ -645,12 +648,19 @@ public class FunctionExprent extends Exprent {
           var other = left.getExprType();
           if (other != null) {
             ((ConstExprent) right).adjustConstType(other);
+            // Boolean constant compared against non-boolean: force to int
+            if (other.typeFamily != TypeFamily.BOOLEAN) {
+              ((ConstExprent) right).forceBooleanToInt();
+            }
           }
         }
         else if (left instanceof ConstExprent) {
           var other = right.getExprType();
           if (other != null) {
             ((ConstExprent) left).adjustConstType(other);
+            if (other.typeFamily != TypeFamily.BOOLEAN) {
+              ((ConstExprent) left).forceBooleanToInt();
+            }
           }
         }
       }

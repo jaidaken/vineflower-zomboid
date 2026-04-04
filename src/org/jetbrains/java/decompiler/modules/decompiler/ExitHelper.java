@@ -15,6 +15,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement.EdgeDirection;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 
 import java.util.ArrayList;
@@ -507,14 +508,16 @@ public final class ExitHelper {
         if (expr instanceof ExitExprent) {
           ExitExprent ex = (ExitExprent) expr;
 
-          List<Exprent> exitExprents = ex.getAllExprents(true);
-
-          // If any of the return expression has constants, adjust them to the return type of the method
-          for (Exprent exprent : exitExprents) {
-            if (exprent instanceof ConstExprent) {
-              ((ConstExprent) exprent).adjustConstType(desc.ret);
-              res = true;
+          // Only adjust the DIRECT return value, not nested sub-expressions
+          // (e.g. method arguments inside a returned method call should not be adjusted)
+          Exprent retVal = ex.getValue();
+          if (retVal instanceof ConstExprent) {
+            ((ConstExprent) retVal).adjustConstType(desc.ret);
+            // Boolean constant returned from non-boolean method (e.g. byte, int)
+            if (desc.ret.typeFamily == TypeFamily.INTEGER) {
+              ((ConstExprent) retVal).forceBooleanToInt();
             }
+            res = true;
           }
         }
       }

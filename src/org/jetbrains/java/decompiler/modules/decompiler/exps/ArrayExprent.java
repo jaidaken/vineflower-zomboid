@@ -88,6 +88,11 @@ public class ArrayExprent extends Exprent {
 
     res.addBytecodeMapping(bytecode);
 
+    // Boolean constants as array indices are always wrong
+    if (index instanceof ConstExprent) {
+      ((ConstExprent) index).forceBooleanToInt();
+    }
+
     return res.append('[').append(index.toJava(indent)).append(']');
   }
 

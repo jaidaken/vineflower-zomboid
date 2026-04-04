@@ -623,6 +623,18 @@ public class ConstExprent extends Exprent {
             constType.typeFamily == TypeFamily.INTEGER) {
       setConstType(VarType.VARTYPE_INT);
     }
+    // BOOLEAN => INT only via explicit request (not through generic adjustConstType)
+  }
+
+  /**
+   * Force a boolean constant (ICONST_0/1) to render as int (0/1).
+   * Use only in contexts where boolean is definitely wrong: arithmetic,
+   * bitwise ops, comparisons against int, array indices.
+   */
+  public void forceBooleanToInt() {
+    if (constType.typeFamily == TypeFamily.BOOLEAN) {
+      setConstType(VarType.VARTYPE_INT);
+    }
   }
 
   private static boolean isPrintableAscii(int c) {

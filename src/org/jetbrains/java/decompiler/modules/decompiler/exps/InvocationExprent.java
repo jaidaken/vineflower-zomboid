@@ -1300,6 +1300,12 @@ public class InvocationExprent extends Exprent {
           break;  // skip last parameter of synthetic constructor call
         }
 
+        // Force boolean constants to int when the descriptor param is definitely int (not boolean)
+        if (lstParameters.get(i) instanceof ConstExprent
+            && descriptor.params[i].typeFamily == TypeFamily.INTEGER) {
+          ((ConstExprent) lstParameters.get(i)).forceBooleanToInt();
+        }
+
         // 'byte' and 'short' literals need an explicit narrowing type cast when used as a parameter
         ExprProcessor.getCastedExprent(lstParameters.get(i), types[i], buff, indent, ambiguous ? ExprProcessor.NullCastType.CAST : ExprProcessor.NullCastType.DONT_CAST_AT_ALL, ambiguous, true, true);
 
