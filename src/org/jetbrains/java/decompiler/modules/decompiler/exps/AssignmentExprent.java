@@ -172,6 +172,11 @@ public class AssignmentExprent extends Exprent {
 
     if (right instanceof ConstExprent) {
       ((ConstExprent) right).adjustConstType(leftType);
+      // For compound assignments (|=, &=, etc.) where the LHS is integer,
+      // boolean constants must be rendered as int (Java forbids int | boolean)
+      if (condType != null && leftType.typeFamily == TypeFamily.INTEGER) {
+        ((ConstExprent) right).forceBooleanToInt();
+      }
     }
 
     this.optimizeCastForAssign();

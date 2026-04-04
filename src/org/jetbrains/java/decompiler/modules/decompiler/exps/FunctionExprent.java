@@ -808,6 +808,26 @@ public class FunctionExprent extends Exprent {
             }
           }
         }
+        // Force boolean→int in ternary branches when the other branch is int.
+        // Fixes "cond ? 4 : false" → "cond ? 4 : 0" (Java forbids int/boolean mix in ternary)
+        Exprent branch1 = lstOperands.get(1);
+        Exprent branch2 = lstOperands.get(2);
+        if (branch1 instanceof ConstExprent && branch2 instanceof ConstExprent) {
+          TypeFamily f1 = branch1.getExprType().typeFamily;
+          TypeFamily f2 = branch2.getExprType().typeFamily;
+          if (f1 == TypeFamily.INTEGER && f2 == TypeFamily.BOOLEAN) {
+            ((ConstExprent) branch2).forceBooleanToInt();
+          } else if (f2 == TypeFamily.INTEGER && f1 == TypeFamily.BOOLEAN) {
+            ((ConstExprent) branch1).forceBooleanToInt();
+          }
+        } else if (branch1 instanceof ConstExprent && branch2.getExprType().typeFamily == TypeFamily.INTEGER
+            && branch1.getExprType().typeFamily == TypeFamily.BOOLEAN) {
+          ((ConstExprent) branch1).forceBooleanToInt();
+        } else if (branch2 instanceof ConstExprent && branch1.getExprType().typeFamily == TypeFamily.INTEGER
+            && branch2.getExprType().typeFamily == TypeFamily.BOOLEAN) {
+          ((ConstExprent) branch2).forceBooleanToInt();
+        }
+
         buf.append(condBuf)
           .appendPossibleNewline(" ").append("? ")
           .append(wrapOperandString(lstOperands.get(1), true, indent))
