@@ -878,7 +878,33 @@ public class ClassWriter implements StatementWriter {
 
     GenericClassDescriptor descriptor = cl.getSignature();
     if (descriptor != null && !descriptor.fparameters.isEmpty()) {
-      appendTypeParameters(buffer, descriptor.fparameters, descriptor.fbounds);
+      List<String> fparams = descriptor.fparameters;
+      List<List<VarType>> fbounds = descriptor.fbounds;
+      // RTF: suppress non-static inner class type params that shadow the outer class's
+      // type params. Java treats them as separate type variables (E#1 vs E#2), causing
+      // incompatible-type errors. Static inner classes have independent type params.
+      // Use node.access (from InnerClasses attribute) instead of cl.hasModifier() which
+      // only checks the class file access flags.
+      if (DecompilerContext.isRoundtripFidelity() && node.parent != null
+          && (node.access & CodeConstants.ACC_STATIC) == 0
+          && node.parent.classStruct != null && node.parent.classStruct.getSignature() != null) {
+        Set<String> outerParams = new HashSet<>(node.parent.classStruct.getSignature().fparameters);
+        if (!outerParams.isEmpty()) {
+          List<String> filtered = new ArrayList<>();
+          List<List<VarType>> filteredBounds = new ArrayList<>();
+          for (int i = 0; i < fparams.size(); i++) {
+            if (!outerParams.contains(fparams.get(i))) {
+              filtered.add(fparams.get(i));
+              filteredBounds.add(fbounds.get(i));
+            }
+          }
+          fparams = filtered;
+          fbounds = filteredBounds;
+        }
+      }
+      if (!fparams.isEmpty()) {
+        appendTypeParameters(buffer, fparams, fbounds);
+      }
     }
 
     if (components != null) {

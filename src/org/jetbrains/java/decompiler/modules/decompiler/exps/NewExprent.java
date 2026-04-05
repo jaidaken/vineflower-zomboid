@@ -449,6 +449,7 @@ public class NewExprent extends Exprent {
       buf.append('}');
     }
     else if (newType.arrayDim == 0) {
+      boolean suppressDiamond = false;
       if (!enumConst) {
         TextBuffer enclosing = null;
         boolean rtfSkipQualifier = false;
@@ -479,13 +480,35 @@ public class NewExprent extends Exprent {
             typename = typename.substring(typename.lastIndexOf('.') + 1);
           }
         }
-        buf.appendTypeName(typename, newType);
+        VarType renderType = newType;
+        // RTF: when instantiating a non-static inner class whose type params shadow
+        // the outer class's type params, strip the generic arguments. The class
+        // declaration no longer declares those type params (they're inherited).
+        if (DecompilerContext.isRoundtripFidelity()) {
+          ClassNode newNode = DecompilerContext.getClassProcessor().getMapRootClasses().get(newType.value);
+          if (newNode != null && newNode.parent != null
+              && (newNode.access & CodeConstants.ACC_STATIC) == 0
+              && newNode.parent.classStruct != null && newNode.parent.classStruct.getSignature() != null) {
+            Set<String> outerParams = new HashSet<>(newNode.parent.classStruct.getSignature().fparameters);
+            if (!outerParams.isEmpty() && newNode.classStruct.getSignature() != null) {
+              boolean allShadowed = true;
+              for (String fp : newNode.classStruct.getSignature().fparameters) {
+                if (!outerParams.contains(fp)) { allShadowed = false; break; }
+              }
+              if (allShadowed) {
+                renderType = new VarType(newType.type, newType.arrayDim, newType.value);
+                suppressDiamond = true;
+              }
+            }
+          }
+        }
+        buf.appendTypeName(typename, renderType);
       }
 
       if (constructor != null) {
         int start = enumConst ? 2 : 0;
         if (!enumConst || start < constructor.getLstParameters().size()) {
-          appendParameters(buf, constructor.getGenericArgs());
+          if (!suppressDiamond) appendParameters(buf, constructor.getGenericArgs());
           buf.append('(').append(constructor.appendParamList(indent)).append(')');
         }
       }

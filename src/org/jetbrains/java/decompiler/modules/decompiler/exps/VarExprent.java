@@ -38,7 +38,9 @@ import org.jetbrains.java.decompiler.util.TextBuffer;
 
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 public class VarExprent extends Exprent implements Pattern {
@@ -256,7 +258,28 @@ public class VarExprent extends Exprent implements Pattern {
         } else if (name.equals(ExprProcessor.UNREPRESENTABLE_TYPE_STRING) || isIntersectionType || useVar) {
           buffer.append("var");
         } else {
-          buffer.appendCastTypeName(definitionType);
+          // RTF: strip generic args from non-static inner class types whose type params
+          // shadow the outer class (they're inherited, not independently declared)
+          VarType renderDefType = definitionType;
+          if (DecompilerContext.isRoundtripFidelity() && definitionType.isGeneric()
+              && definitionType.type == CodeType.OBJECT && definitionType.value != null) {
+            ClassNode typeNode = DecompilerContext.getClassProcessor().getMapRootClasses().get(definitionType.value);
+            if (typeNode != null && typeNode.parent != null
+                && (typeNode.access & CodeConstants.ACC_STATIC) == 0
+                && typeNode.parent.classStruct != null && typeNode.parent.classStruct.getSignature() != null) {
+              Set<String> outerPs = new HashSet<>(typeNode.parent.classStruct.getSignature().fparameters);
+              if (!outerPs.isEmpty() && typeNode.classStruct.getSignature() != null) {
+                boolean allShad = true;
+                for (String fp : typeNode.classStruct.getSignature().fparameters) {
+                  if (!outerPs.contains(fp)) { allShad = false; break; }
+                }
+                if (allShad) {
+                  renderDefType = new VarType(definitionType.type, definitionType.arrayDim, definitionType.value);
+                }
+              }
+            }
+          }
+          buffer.appendCastTypeName(renderDefType);
         }
 
         buffer.append(" ");
