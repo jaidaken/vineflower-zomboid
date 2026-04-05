@@ -33,6 +33,7 @@ import org.jetbrains.java.decompiler.struct.consts.PrimitiveConstant;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.FieldDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.MethodDescriptor;
+import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericClassDescriptor;
@@ -1567,6 +1568,11 @@ public class ClassWriter implements StatementWriter {
                   buffer.append(";").appendLineSeparator();
                 }
               }
+              // RTF: identify variables that genuinely hold both boolean and int values
+              // (slot reuse). Must run BEFORE toJava() so the flag is available during rendering.
+              if (DecompilerContext.isRoundtripFidelity()) {
+                markDualTypedVars(root, methodWrapper.varproc);
+              }
               TextBuffer code = root.toJava(indent + 1);
               code.addBytecodeMapping(root.getDummyExit().bytecode);
               hideMethod = code.length() == 0 && (clInit || dInit || hideConstructor(node, init, throwsExceptions, paramCount, flags));
@@ -1638,6 +1644,115 @@ public class ClassWriter implements StatementWriter {
 
   // Returns the default value literal for a given return type, used when a method
   // failed to decompile and needs a placeholder return statement.
+  /**
+   * Pre-rendering analysis: identify variables that have BOTH boolean method return
+   * assignments AND int method return assignments. These are genuinely dual-typed
+   * (same bytecode slot reused for different purposes) and need special rendering.
+   */
+  private static void markDualTypedVars(RootStatement root, org.jetbrains.java.decompiler.modules.decompiler.vars.VarProcessor varProc) {
+    if (varProc == null || root == null) return;
+
+    Map<String, Boolean> hasBoolAssign = new HashMap<>();
+    Map<String, Boolean> hasIntAssign = new HashMap<>();
+
+    // Walk entire statement tree collecting assignments
+    Deque<Statement> stack = new ArrayDeque<>();
+    stack.add(root);
+    while (!stack.isEmpty()) {
+      Statement stat = stack.removeFirst();
+      stack.addAll(stat.getStats());
+
+      // Process exprents in this statement
+      List<Exprent> exprents = stat.getExprents();
+      if (exprents != null) {
+        for (Exprent expr : exprents) {
+          scanAssignmentsForDualType(expr, hasBoolAssign, hasIntAssign);
+        }
+      }
+      // Also process varDefinitions
+      for (Exprent vd : stat.getVarDefinitions()) {
+        scanAssignmentsForDualType(vd, hasBoolAssign, hasIntAssign);
+      }
+    }
+
+    // Mark variables present in BOTH maps (has both boolean and int method return assignments)
+    for (String name : hasBoolAssign.keySet()) {
+      if (hasIntAssign.containsKey(name)) {
+        varProc.markDualTypedVar(name);
+      }
+    }
+
+    // Also detect boolean vars used as int method params (bLoadCharacter pattern:
+    // declared boolean, assigned constants 0/1, but passed to method expecting int).
+    // Only trigger when the var has NO bool/int InvocationExprent assignments
+    // (otherwise the above check already handles it).
+    Set<String> boolVarsUsedAsIntParam = new HashSet<>();
+    stack = new ArrayDeque<>();
+    stack.add(root);
+    while (!stack.isEmpty()) {
+      Statement stat2 = stack.removeFirst();
+      stack.addAll(stat2.getStats());
+      List<Exprent> exps = stat2.getExprents();
+      if (exps == null) continue;
+      for (Exprent ex : exps) {
+        List<Exprent> subs = ex.getAllExprents(true);
+        subs.add(ex);
+        for (Exprent sub : subs) {
+          if (!(sub instanceof InvocationExprent)) continue;
+          InvocationExprent inv = (InvocationExprent) sub;
+          org.jetbrains.java.decompiler.struct.gen.MethodDescriptor desc = inv.getDescriptor();
+          if (desc == null) continue;
+          List<Exprent> params = inv.getLstParameters();
+          for (int pi = 0; pi < params.size() && pi < desc.params.length; pi++) {
+            if (params.get(pi) instanceof VarExprent
+                && desc.params[pi].typeFamily == TypeFamily.INTEGER
+                && desc.params[pi].type != CodeType.BOOLEAN) {
+              VarExprent argVar = (VarExprent) params.get(pi);
+              VarType argType = argVar.getExprType();
+              if (argType != null && argType.type == CodeType.BOOLEAN) {
+                String argName = argVar.getName();
+                if (argName != null && !hasBoolAssign.containsKey(argName) && !hasIntAssign.containsKey(argName)) {
+                  boolVarsUsedAsIntParam.add(argName);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    for (String name : boolVarsUsedAsIntParam) {
+      varProc.markDualTypedVar(name);
+    }
+  }
+
+  private static void scanAssignmentsForDualType(Exprent expr, Map<String, Boolean> hasBool, Map<String, Boolean> hasInt) {
+    List<Exprent> all = expr.getAllExprents(true);
+    all.add(expr);
+    for (Exprent e : all) {
+      if (!(e instanceof AssignmentExprent)) continue;
+      AssignmentExprent assign = (AssignmentExprent) e;
+      if (!(assign.getLeft() instanceof VarExprent)) continue;
+      Exprent rhs = assign.getRight();
+      if (!(rhs instanceof InvocationExprent)) continue;
+
+      VarExprent lhs = (VarExprent) assign.getLeft();
+      String name = lhs.getName();
+      if (name == null) continue;
+
+      InvocationExprent inv = (InvocationExprent) rhs;
+      org.jetbrains.java.decompiler.struct.gen.MethodDescriptor desc = inv.getDescriptor();
+      if (desc == null) continue;
+
+      if (desc.ret.type == CodeType.BOOLEAN) {
+        hasBool.put(name, true);
+      } else if (desc.ret.type == CodeType.INT || desc.ret.type == CodeType.BYTE
+          || desc.ret.type == CodeType.SHORT || desc.ret.type == CodeType.CHAR) {
+        hasInt.put(name, true);
+      }
+    }
+
+  }
+
   private static String getDefaultReturnValue(VarType retType) {
     if (retType.arrayDim > 0) {
       return "null";

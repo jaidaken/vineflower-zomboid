@@ -124,6 +124,20 @@ public class AssignmentExprent extends Exprent {
   public TextBuffer toJava(int indent) {
     VarType leftType = left.getInferredExprType(null);
 
+    // RTF: override leftType to INT for dual-typed variables (boolean+int slot reuse).
+    // The pre-rendering scan in ClassWriter.markDualTypedVars identified these.
+    boolean isDualTyped = false;
+    if (DecompilerContext.isRoundtripFidelity() && left instanceof VarExprent) {
+      VarExprent leftVar = (VarExprent) left;
+      if (leftVar.getProcessor() != null && leftVar.getProcessor().isDualTypedVar(leftVar.getName())) {
+        isDualTyped = true;
+        leftType = VarType.VARTYPE_INT;
+        if (leftVar.isDefinition()) {
+          leftVar.setUseVar(true);
+        }
+      }
+    }
+
     boolean fieldInClassInit = false, hiddenField = false;
     if (left instanceof FieldExprent) { // first assignment to a final field. Field name without "this" in front of it
       FieldExprent field = (FieldExprent) left;
@@ -147,20 +161,20 @@ public class AssignmentExprent extends Exprent {
 
     TextBuffer buffer = new TextBuffer();
 
-    // Fix boolean/int type conflict: when declaring a boolean variable but
-    // assigning an int constant (0 or 1), widen the declaration to int.
-    // This fixes "int cannot be converted to boolean" when the variable is
-    // narrowed to boolean from ICONST_0/1 but used as int elsewhere.
-    if (left instanceof VarExprent && ((VarExprent) left).isDefinition()
-        && leftType.equals(VarType.VARTYPE_BOOLEAN)
-        && right instanceof ConstExprent) {
+    // For boolean vars initialized with int constants: use 'var' to let javac infer int.
+    // This applies to ALL boolean vars with ICONST_0/1 init (keeps existing behavior).
+    if (!isDualTyped && left instanceof VarExprent && ((VarExprent) left).isDefinition()
+        && leftType.equals(VarType.VARTYPE_BOOLEAN) && right instanceof ConstExprent) {
       ConstExprent constRight = (ConstExprent) right;
       if (constRight.getConstType().typeFamily == TypeFamily.INTEGER
           || (constRight.getConstType().equals(VarType.VARTYPE_BOOLEAN)
               && constRight.getValue() instanceof Integer)) {
-        // Widen to int - use 'var' to let javac infer from the literal
         ((VarExprent) left).setUseVar(true);
       }
+    }
+    // Force dual-typed var constants to render as int (0/1 not false/true)
+    if (isDualTyped && right instanceof ConstExprent) {
+      ((ConstExprent) right).forceBooleanToInt();
     }
 
     if (fieldInClassInit) {

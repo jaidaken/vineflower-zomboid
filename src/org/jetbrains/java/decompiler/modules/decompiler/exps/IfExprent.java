@@ -159,8 +159,12 @@ public class IfExprent extends Exprent {
     Exprent renderCond = condition;
     if (DecompilerContext.isRoundtripFidelity() && condition instanceof VarExprent) {
       VarType ct = condition.getExprType();
-      if (ct != null && ct.type != org.jetbrains.java.decompiler.struct.gen.CodeType.BOOLEAN
-          && ct.typeFamily == org.jetbrains.java.decompiler.struct.gen.TypeFamily.INTEGER) {
+      VarExprent condVar = (VarExprent) condition;
+      boolean isDualTyped = condVar.getProcessor() != null
+          && condVar.getProcessor().isDualTypedVar(condVar.getName());
+      if ((ct != null && ct.type != org.jetbrains.java.decompiler.struct.gen.CodeType.BOOLEAN
+           && ct.typeFamily == org.jetbrains.java.decompiler.struct.gen.TypeFamily.INTEGER)
+          || isDualTyped) {
         renderCond = new FunctionExprent(FunctionExprent.FunctionType.NE,
           java.util.Arrays.asList(condition, new ConstExprent(VarType.VARTYPE_INT, 0, null)),
           condition.bytecode);

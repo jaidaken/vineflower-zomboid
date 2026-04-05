@@ -36,6 +36,12 @@ public class VarProcessor {
   private final Map<VarVersionPair, Pair<String, VarVersionPair>> varSources = new HashMap<>();
   public boolean nestedProcessed;
 
+  // RTF: variable names identified by pre-rendering analysis as genuinely dual-typed
+  // (same slot holds both boolean method returns and int method returns).
+  private final Set<String> dualTypedVarNames = new HashSet<>();
+  public void markDualTypedVar(String name) { if (name != null) dualTypedVarNames.add(name); }
+  public boolean isDualTypedVar(String name) { return name != null && dualTypedVarNames.contains(name); }
+
   // Per-lambda name overrides, active only during rendering of a specific lambda
   // that shares this method's synthetic body with another lambda.
   private @Nullable Map<VarVersionPair, String> activeNameOverrides;

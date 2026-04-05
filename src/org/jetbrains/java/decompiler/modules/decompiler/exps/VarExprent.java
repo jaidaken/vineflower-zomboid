@@ -229,6 +229,12 @@ public class VarExprent extends Exprent implements Pattern {
           buffer.append("final ");
         }
         VarType definitionType = getDefinitionVarType();
+        // RTF: dual-typed vars (boolean slot reused for int) should declare as int
+        if (DecompilerContext.isRoundtripFidelity() && processor != null
+            && processor.isDualTypedVar(getName())
+            && definitionType.type == CodeType.BOOLEAN) {
+          definitionType = VarType.VARTYPE_INT;
+        }
         // When the definition type is an OBJECT type (e.g., from LVT pinning),
         // ensure it gets registered with the import collector. The normal
         // getCastTypeName path may have its import registration blocked by a
