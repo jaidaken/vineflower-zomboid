@@ -1723,6 +1723,46 @@ public class ClassWriter implements StatementWriter {
     for (String name : boolVarsUsedAsIntParam) {
       varProc.markDualTypedVar(name);
     }
+
+    // Detect variables where the LVT says boolean but the inferred type is int.
+    // These variables will use 'var' keyword, and the compiler infers int from
+    // assignments like 'var x = 0', causing errors in boolean contexts.
+    stack = new ArrayDeque<>();
+    stack.add(root);
+    while (!stack.isEmpty()) {
+      Statement stat3 = stack.removeFirst();
+      stack.addAll(stat3.getStats());
+      List<Exprent> exprs3 = new ArrayList<>(stat3.getVarDefinitions());
+      if (stat3.getExprents() != null) exprs3.addAll(stat3.getExprents());
+      for (Exprent expr : exprs3) {
+        List<Exprent> subs = expr.getAllExprents(true);
+        subs.add(expr);
+        for (Exprent sub : subs) {
+          VarExprent var = null;
+          if (sub instanceof VarExprent) var = (VarExprent) sub;
+          else if (sub instanceof AssignmentExprent
+              && ((AssignmentExprent) sub).getLeft() instanceof VarExprent) {
+            var = (VarExprent) ((AssignmentExprent) sub).getLeft();
+          }
+          if (var == null || var.getLVT() == null) continue;
+          String name = var.getName();
+          if (name == null || varProc.isDualTypedVar(name)) continue;
+          String lvtDesc = var.getLVT().getDescriptor();
+          VarType procType = varProc.getVarType(var.getVarVersionPair());
+          // LVT says boolean but processor says int
+          if ("Z".equals(lvtDesc) && procType != null
+              && procType.typeFamily == TypeFamily.INTEGER
+              && procType.type != CodeType.BOOLEAN) {
+            varProc.markDualTypedVar(name);
+          }
+          // LVT says int but processor says boolean
+          else if ("I".equals(lvtDesc) && procType != null
+              && procType.type == CodeType.BOOLEAN) {
+            varProc.markDualTypedVar(name);
+          }
+        }
+      }
+    }
   }
 
   private static void scanAssignmentsForDualType(Exprent expr, Map<String, Boolean> hasBool, Map<String, Boolean> hasInt) {
@@ -1732,22 +1772,38 @@ public class ClassWriter implements StatementWriter {
       if (!(e instanceof AssignmentExprent)) continue;
       AssignmentExprent assign = (AssignmentExprent) e;
       if (!(assign.getLeft() instanceof VarExprent)) continue;
-      Exprent rhs = assign.getRight();
-      if (!(rhs instanceof InvocationExprent)) continue;
 
       VarExprent lhs = (VarExprent) assign.getLeft();
       String name = lhs.getName();
       if (name == null) continue;
 
-      InvocationExprent inv = (InvocationExprent) rhs;
-      org.jetbrains.java.decompiler.struct.gen.MethodDescriptor desc = inv.getDescriptor();
-      if (desc == null) continue;
+      Exprent rhs = assign.getRight();
 
-      if (desc.ret.type == CodeType.BOOLEAN) {
-        hasBool.put(name, true);
-      } else if (desc.ret.type == CodeType.INT || desc.ret.type == CodeType.BYTE
-          || desc.ret.type == CodeType.SHORT || desc.ret.type == CodeType.CHAR) {
-        hasInt.put(name, true);
+      if (rhs instanceof InvocationExprent) {
+        InvocationExprent inv = (InvocationExprent) rhs;
+        org.jetbrains.java.decompiler.struct.gen.MethodDescriptor desc = inv.getDescriptor();
+        if (desc == null) continue;
+
+        if (desc.ret.type == CodeType.BOOLEAN) {
+          hasBool.put(name, true);
+        } else if (desc.ret.type == CodeType.INT || desc.ret.type == CodeType.BYTE
+            || desc.ret.type == CodeType.SHORT || desc.ret.type == CodeType.CHAR) {
+          hasInt.put(name, true);
+        }
+      }
+      // RTF: detect int constant assignments (0, 1) to boolean-typed variables.
+      // The LVT may declare a variable as boolean (Z) but bytecode assigns int constants,
+      // indicating dual-typed slot reuse (e.g., bLoadCharacter = 1).
+      else if (rhs instanceof ConstExprent) {
+        VarType lhsType = lhs.getVarType();
+        ConstExprent constRhs = (ConstExprent) rhs;
+        VarType constType = constRhs.getConstType();
+        if (lhsType != null && lhsType.type == CodeType.BOOLEAN
+            && constType != null && constType.typeFamily == TypeFamily.INTEGER
+            && constType.type != CodeType.BOOLEAN) {
+          hasBool.put(name, true);
+          hasInt.put(name, true);
+        }
       }
     }
 

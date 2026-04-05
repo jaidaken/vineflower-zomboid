@@ -1041,6 +1041,10 @@ public class FunctionExprent extends Exprent {
   private static boolean needsBoolConversion(Exprent expr) {
     if (expr instanceof VarExprent) {
       VarExprent var = (VarExprent) expr;
+      // Dual-typed vars are rendered as 'var' (compiler infers int), so they need conversion
+      if (var.getProcessor() != null && var.getProcessor().isDualTypedVar(var.getName())) {
+        return true;
+      }
       // Variables with boolean LVT type are definitely boolean - no conversion needed
       if (var.getLVT() != null && "Z".equals(var.getLVT().getDescriptor())) {
         return false;

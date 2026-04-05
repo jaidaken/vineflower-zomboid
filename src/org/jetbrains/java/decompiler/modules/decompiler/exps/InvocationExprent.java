@@ -1248,6 +1248,31 @@ public class InvocationExprent extends Exprent {
             }
           }
           if (type != null && !(type.isGeneric() && ((GenericType)type).hasUnknownGenericType(namedGens))) {
+            // RTF: Don't use wildcard-bounded generic types for constructor params
+            // when the argument is NOT a lambda. Casting to a wildcard type like
+            // (Collection<? extends String>) produces invalid Java when the arg is
+            // a raw invocation like List.of(). But lambdas NEED the wildcard cast
+            // as their target type for type inference.
+            if (DecompilerContext.isRoundtripFidelity() && functype == Type.INIT
+                && type instanceof GenericType) {
+              boolean argIsLambda = x < parameters.size()
+                  && parameters.get(x) instanceof NewExprent
+                  && ((NewExprent) parameters.get(x)).isLambda();
+              if (!argIsLambda) {
+                GenericType gt = (GenericType) type;
+                boolean hasWildcard = false;
+                for (VarType arg : gt.getArguments()) {
+                  if (arg != null && arg instanceof GenericType
+                      && ((GenericType) arg).getWildcard() != GenericType.WILDCARD_NO) {
+                    hasWildcard = true;
+                    break;
+                  }
+                }
+                if (hasWildcard) {
+                  continue; // keep raw descriptor type
+                }
+              }
+            }
             types[x] = type;
           }
         }
