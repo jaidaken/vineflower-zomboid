@@ -1902,6 +1902,7 @@ public class ExprProcessor implements CodeConstants {
           // Don't trigger for concrete→concrete or out-of-scope GENVARs
           boolean rightHasLocalGenvar = false;
           for (VarType arg : rg.getArguments()) {
+            if (arg == null) continue;
             if (arg.type == CodeType.GENVAR) {
               // Verify GENVAR is in current scope
               boolean inScope = false;
@@ -1983,6 +1984,46 @@ public class ExprProcessor implements CodeConstants {
       }
       if (!inScope) {
         cast = false;
+      }
+    }
+
+    // RTF: when the cast target is a GenericType with GENVAR arguments (like XuiVar<T, C>),
+    // check if those GENVARs are in scope. If not, strip them and use the raw type.
+    // This prevents "cannot find symbol" errors for type params from inner classes.
+    if (cast && DecompilerContext.isRoundtripFidelity()
+        && leftType instanceof org.jetbrains.java.decompiler.struct.gen.generics.GenericType) {
+      org.jetbrains.java.decompiler.struct.gen.generics.GenericType gt =
+          (org.jetbrains.java.decompiler.struct.gen.generics.GenericType) leftType;
+      if (!gt.getArguments().isEmpty()) {
+        boolean hasOutOfScopeGenvar = false;
+        for (VarType arg : gt.getArguments()) {
+          if (arg != null && arg.type == CodeType.GENVAR) {
+            boolean inScope = false;
+            org.jetbrains.java.decompiler.main.rels.MethodWrapper mw =
+                DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+            if (mw != null && mw.methodStruct.getSignature() != null) {
+              for (String tp : mw.methodStruct.getSignature().typeParameters) {
+                if (arg.value.equals(tp)) { inScope = true; break; }
+              }
+            }
+            if (!inScope) {
+              org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode cls =
+                  DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+              while (cls != null && !inScope) {
+                if (cls.classStruct.getSignature() != null) {
+                  for (String tp : cls.classStruct.getSignature().fparameters) {
+                    if (arg.value.equals(tp)) { inScope = true; break; }
+                  }
+                }
+                cls = cls.parent;
+              }
+            }
+            if (!inScope) { hasOutOfScopeGenvar = true; break; }
+          }
+        }
+        if (hasOutOfScopeGenvar) {
+          leftType = new VarType(CodeType.OBJECT, leftType.arrayDim, leftType.value);
+        }
       }
     }
 
