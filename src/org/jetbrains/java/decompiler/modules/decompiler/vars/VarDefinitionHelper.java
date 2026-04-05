@@ -434,6 +434,9 @@ public class VarDefinitionHelper {
     setNonFinal(root, new HashSet<>());
     remapClashingNames(root, mt);
     scopeSwitchCasesWithClashingVarDefs(root);
+    if (DecompilerContext.isRoundtripFidelity()) {
+      fixRemainingDuplicateDefinitions(root);
+    }
   }
 
 
@@ -1340,7 +1343,16 @@ public class VarDefinitionHelper {
                   || right instanceof NewExprent
                   || (right instanceof FunctionExprent
                       && ((FunctionExprent)right).getFuncType() == FunctionExprent.FunctionType.CAST)) {
-                var.setUseVar(true);
+                // Don't use var if the compiler would infer an inaccessible type
+                // (e.g. a private inner class). The compiler resolves the var type
+                // from the RHS, and if that type is not accessible from the current
+                // class, using var causes compile errors.
+                VarType inferredType = right.getInferredExprType(null);
+                if (!isVarInferredTypeAccessible(inferredType)) {
+                  // skip var
+                } else {
+                  var.setUseVar(true);
+                }
               }
             }
           }
@@ -2843,5 +2855,179 @@ public class VarDefinitionHelper {
 
   public Map<VarVersionPair, String> getClashingNames() {
     return clashingNames;
+  }
+
+  /**
+   * Post-pass: detect duplicate variable definitions that remapClashingNames missed.
+   * This happens when two different VarVersionPairs share the same LVT name and are
+   * in the same Java scope (e.g., same slot reused in sequential basic blocks within
+   * a loop body). remapClashingNames processes children independently and can clear
+   * names between siblings, missing the clash.
+   */
+  private void fixRemainingDuplicateDefinitions(Statement root) {
+    Set<String> names = new HashSet<>();
+    Map<String, VarVersionPair> nameToVvp = new HashMap<>();
+    walkForDuplicateDefs(root, names, nameToVvp);
+  }
+
+  private void walkForDuplicateDefs(Statement stat, Set<String> parentNames,
+                                     Map<String, VarVersionPair> nameToVvp) {
+    // Process varDefinitions first (they're in the parent's scope)
+    for (Exprent vd : stat.getVarDefinitions()) {
+      checkAndRenameDuplicateDef(vd, parentNames, nameToVvp);
+    }
+
+    // For statements with exprents (BasicBlockStatements), process them in the parent scope
+    if (stat.getExprents() != null) {
+      for (Exprent expr : stat.getExprents()) {
+        checkAndRenameDuplicateDef(expr, parentNames, nameToVvp);
+      }
+      return;
+    }
+
+    // For compound statements, determine scoping strategy per child
+    List<Statement> children = stat.getStats();
+    if (stat instanceof IfStatement) {
+      IfStatement ifStat = (IfStatement) stat;
+      // When an if-statement without else is inside a loop, the rendering may flip the
+      // condition and emit "if (!cond) continue/break;" followed by the if-body at the
+      // parent scope level. Also, when it's the last child in a sequence, the same
+      // flattening can happen. In these cases the if-body shares the parent Java scope.
+      boolean ifBodyRendersFlat = false;
+      if (ifStat.getElsestat() == null) {
+        // Check if we're inside a loop (any ancestor is a DoStatement)
+        Statement ancestor = ifStat.getParent();
+        while (ancestor != null) {
+          if (ancestor instanceof DoStatement) {
+            ifBodyRendersFlat = true;
+            break;
+          }
+          ancestor = ancestor.getParent();
+        }
+        // Also check if this is the last child of its parent
+        if (!ifBodyRendersFlat) {
+          Statement parent = ifStat.getParent();
+          if (parent != null) {
+            List<Statement> siblings = parent.getStats();
+            if (!siblings.isEmpty() && siblings.get(siblings.size() - 1) == ifStat) {
+              ifBodyRendersFlat = true;
+            }
+          }
+        }
+      }
+      for (Statement child : children) {
+        if (child == ifStat.getIfstat()) {
+          if (ifBodyRendersFlat) {
+            walkForDuplicateDefs(child, parentNames, nameToVvp);
+          } else {
+            walkForDuplicateDefs(child, new HashSet<>(parentNames), new HashMap<>(nameToVvp));
+          }
+        } else if (child == ifStat.getElsestat()) {
+          walkForDuplicateDefs(child, new HashSet<>(parentNames), new HashMap<>(nameToVvp));
+        } else {
+          walkForDuplicateDefs(child, parentNames, nameToVvp);
+        }
+      }
+    } else if (stat instanceof DoStatement) {
+      // Loop body is its own scope
+      for (Statement child : children) {
+        walkForDuplicateDefs(child, new HashSet<>(parentNames), new HashMap<>(nameToVvp));
+      }
+    } else if (stat instanceof SwitchStatement) {
+      // Each case branch is an independent scope
+      for (Statement child : children) {
+        walkForDuplicateDefs(child, new HashSet<>(parentNames), new HashMap<>(nameToVvp));
+      }
+    } else {
+      // SequenceStatement, CatchStatement body, etc.: children share scope
+      for (Statement child : children) {
+        walkForDuplicateDefs(child, parentNames, nameToVvp);
+      }
+    }
+  }
+
+  private void checkAndRenameDuplicateDef(Exprent expr, Set<String> names,
+                                           Map<String, VarVersionPair> nameToVvp) {
+    VarExprent var = null;
+    if (expr instanceof VarExprent && ((VarExprent) expr).isDefinition()) {
+      var = (VarExprent) expr;
+    } else if (expr instanceof AssignmentExprent) {
+      Exprent left = ((AssignmentExprent) expr).getLeft();
+      if (left instanceof VarExprent && ((VarExprent) left).isDefinition()) {
+        var = (VarExprent) left;
+      }
+    }
+    if (var == null) return;
+
+    String name = var.getName();
+    if (name == null) return;
+
+    if (!names.add(name)) {
+      VarVersionPair firstVvp = nameToVvp.get(name);
+      VarVersionPair thisVvp = var.getVarVersionPair();
+
+      if (firstVvp != null && firstVvp.equals(thisVvp)) {
+        // Same VVP defined twice: remove the duplicate definition flag.
+        // Renaming would rename ALL references (including the first def).
+        var.setDefinition(false);
+      } else {
+        // Different VVP, same name: rename the second variable
+        String newName = name + "x";
+        while (names.contains(newName)) newName += "x";
+        names.add(newName);
+        this.varproc.setClashingName(thisVvp, newName);
+        nameToVvp.put(newName, thisVvp);
+      }
+    } else {
+      nameToVvp.put(name, var.getVarVersionPair());
+    }
+  }
+
+  /**
+   * Checks whether a type inferred by the Java compiler for a 'var' declaration would be
+   * accessible from the current class. If the type is a private/package-private inner class
+   * or a non-public top-level class from a different package, using 'var' would cause a
+   * compile error because the compiler can't declare a variable of an inaccessible type.
+   */
+  private static boolean isVarInferredTypeAccessible(VarType type) {
+    if (type == null || type.type != CodeType.OBJECT || type.value == null) {
+      return true; // primitives, unknowns are fine
+    }
+
+    StructClass cl = DecompilerContext.getStructContext().getClass(type.value);
+    if (cl == null) {
+      return true; // not in class pool, assume accessible
+    }
+
+    // Check if the class itself is public
+    if (!cl.hasModifier(CodeConstants.ACC_PUBLIC)) {
+      return false;
+    }
+
+    // For inner classes (name contains $), check the inner class access flags
+    // in the enclosing class. The class file might say ACC_PUBLIC but the
+    // InnerClasses attribute may say private/protected.
+    String className = type.value;
+    int dollarIdx = className.lastIndexOf('$');
+    if (dollarIdx > 0) {
+      String outerName = className.substring(0, dollarIdx);
+      StructClass outerCl = DecompilerContext.getStructContext().getClass(outerName);
+      if (outerCl != null) {
+        org.jetbrains.java.decompiler.struct.attr.StructInnerClassesAttribute attr =
+            outerCl.getAttribute(StructGeneralAttribute.ATTRIBUTE_INNER_CLASSES);
+        if (attr != null) {
+          for (org.jetbrains.java.decompiler.struct.attr.StructInnerClassesAttribute.Entry entry : attr.getEntries()) {
+            if (className.equals(entry.innerName)) {
+              if ((entry.accessFlags & CodeConstants.ACC_PUBLIC) == 0) {
+                return false;
+              }
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    return true;
   }
 }
