@@ -549,6 +549,42 @@ public class FunctionExprent extends Exprent {
     return rendered;
   }
 
+  /**
+   * Checks if an operand is boolean-typed for the purpose of simplifying NE/EQ with 0/1.
+   * Covers: explicit boolean type, LVT boolean descriptor, var-declared variables
+   * (which may render as boolean), and boolean-producing AND expressions.
+   */
+  private static boolean isBoolishOperand(Exprent expr) {
+    VarType type = expr.getExprType();
+    if (type.equals(VarType.VARTYPE_BOOLEAN)) return true;
+    // BYTECHAR is the common internal type for booleans at the bytecode level
+    if (type.type == CodeType.BOOLEAN) return true;
+    if (expr instanceof VarExprent) {
+      VarExprent ve = (VarExprent) expr;
+      // Check LVT descriptor for boolean type
+      if (ve.getLVT() != null && "Z".equals(ve.getLVT().getDescriptor())) return true;
+      // Check VarProcessor type
+      if (ve.getProcessor() != null) {
+        VarType procType = ve.getProcessor().getVarType(ve.getVarVersionPair());
+        if (procType != null && (procType.equals(VarType.VARTYPE_BOOLEAN) || procType.type == CodeType.BOOLEAN)) return true;
+      }
+    }
+    if (expr instanceof FunctionExprent) {
+      FunctionExprent fe = (FunctionExprent) expr;
+      // AND/OR with a constant-0 operand or boolean operand produces boolean
+      if (fe.funcType == FunctionType.AND || fe.funcType == FunctionType.OR) {
+        for (Exprent op : fe.getLstOperands()) {
+          if (isBoolishOperand(op)) return true;
+        }
+      }
+      // Comparison operators produce boolean
+      if (fe.funcType.isComparison()) return true;
+      // BOOLEAN_AND/OR produce boolean
+      if (fe.funcType == FunctionType.BOOLEAN_AND || fe.funcType == FunctionType.BOOLEAN_OR) return true;
+    }
+    return false;
+  }
+
   @Override
   public boolean equals(Object o) {
     if (o == this) return true;
@@ -608,35 +644,6 @@ public class FunctionExprent extends Exprent {
       if (DecompilerContext.isRoundtripFidelity()) {
         leftOperand = rtfCastObjectOperand(left, leftOperand, right.getExprType());
         rightOperand = rtfCastObjectOperand(right, rightOperand, left.getExprType());
-      }
-
-      // RTF: simplify boolean-vs-int comparisons. When one operand is boolean and the
-      // other is constant 0/1, Java doesn't allow `bool != 0`. Simplify to `bool`/`!bool`.
-      if (DecompilerContext.isRoundtripFidelity()
-          && (this.funcType == FunctionType.NE || this.funcType == FunctionType.EQ)) {
-        Exprent boolOp = null;
-        ConstExprent constOp = null;
-        boolean boolOnLeft = false;
-        if (left.getExprType().equals(VarType.VARTYPE_BOOLEAN) && right instanceof ConstExprent) {
-          boolOp = left; constOp = (ConstExprent) right; boolOnLeft = true;
-        } else if (right.getExprType().equals(VarType.VARTYPE_BOOLEAN) && left instanceof ConstExprent) {
-          boolOp = right; constOp = (ConstExprent) left; boolOnLeft = false;
-        }
-        if (boolOp != null && constOp.getValue() instanceof Integer) {
-          int val = (Integer) constOp.getValue();
-          if (val == 0 || val == 1) {
-            // NE 0 or EQ 1 → just the boolean; EQ 0 or NE 1 → negated
-            boolean negate = (this.funcType == FunctionType.EQ && val == 0)
-                || (this.funcType == FunctionType.NE && val == 1);
-            TextBuffer boolBuf = boolOp.toJava(indent);
-            if (negate) {
-              buf.append("!").append(boolBuf);
-            } else {
-              buf.append(boolBuf);
-            }
-            return buf;
-          }
-        }
       }
 
       // Check for special cased integers on the right and left hand side, and then return if they are found.
@@ -705,6 +712,34 @@ public class FunctionExprent extends Exprent {
     if (funcType.ordinal() >= FunctionType.EQ.ordinal()) {
       Exprent left = lstOperands.get(0);
       Exprent right = lstOperands.get(1);
+
+      // RTF: simplify boolean-vs-int comparisons for NE/EQ.
+      // When one operand is boolean (from LVT or expression type) and the other
+      // is constant 0/1, Java doesn't allow `bool != 0`. Simplify to `bool`/`!bool`.
+      if (DecompilerContext.isRoundtripFidelity()
+          && (funcType == FunctionType.NE || funcType == FunctionType.EQ)) {
+        Exprent boolOp = null;
+        ConstExprent constOp = null;
+        if (right instanceof ConstExprent && isBoolishOperand(left)) {
+          boolOp = left; constOp = (ConstExprent) right;
+        } else if (left instanceof ConstExprent && isBoolishOperand(right)) {
+          boolOp = right; constOp = (ConstExprent) left;
+        }
+        if (boolOp != null && constOp.getValue() instanceof Integer) {
+          int val = (Integer) constOp.getValue();
+          if (val == 0 || val == 1) {
+            boolean negate = (funcType == FunctionType.EQ && val == 0)
+                || (funcType == FunctionType.NE && val == 1);
+            TextBuffer boolBuf = boolOp.toJava(indent);
+            if (negate) {
+              buf.append("!").append(boolBuf);
+            } else {
+              buf.append(boolBuf);
+            }
+            return buf;
+          }
+        }
+      }
 
       if (funcType.ordinal() <= FunctionType.LE.ordinal()) {
         if (right instanceof ConstExprent) {
@@ -1004,24 +1039,38 @@ public class FunctionExprent extends Exprent {
    * due to SSA merging widening boolean to int.
    */
   private static boolean needsBoolConversion(Exprent expr) {
-    if (expr.getExprType().typeFamily == TypeFamily.INTEGER) {
-      return true;
-    }
-    // VarExprent may have boolean inferred type but int DECLARATION type.
-    // The naming convention uses the type at definition time: intN = int, booleanN = boolean.
-    // After type narrowing, the VarExprent's type may be boolean but the declaration is still int.
     if (expr instanceof VarExprent) {
       VarExprent var = (VarExprent) expr;
-      // Check varType (declaration type)
-      VarType varType = var.getVarType();
-      if (varType.typeFamily == TypeFamily.INTEGER && !varType.equals(VarType.VARTYPE_BOOLEAN)) {
-        return true;
+      // Variables with boolean LVT type are definitely boolean - no conversion needed
+      if (var.getLVT() != null && "Z".equals(var.getLVT().getDescriptor())) {
+        return false;
       }
       // Check if the variable processor named it as int (definitive signal)
       String name = var.getName();
       if (name != null && name.startsWith("int")) {
         return true;
       }
+      VarType varType = var.getVarType();
+      if (varType.typeFamily == TypeFamily.INTEGER && !varType.equals(VarType.VARTYPE_BOOLEAN)) {
+        return true;
+      }
+    }
+    // FunctionExprent results that are boolean (comparisons, boolean AND, etc.) don't need conversion
+    if (expr instanceof FunctionExprent) {
+      FunctionExprent fe = (FunctionExprent) expr;
+      if (fe.funcType.isComparison() || fe.funcType == FunctionType.BOOLEAN_AND
+          || fe.funcType == FunctionType.BOOLEAN_OR || fe.funcType == FunctionType.BOOL_NOT) {
+        return false;
+      }
+      // AND/OR with a boolean operand produces boolean
+      if (fe.funcType == FunctionType.AND || fe.funcType == FunctionType.OR) {
+        for (Exprent op : fe.getLstOperands()) {
+          if (isBoolishOperand(op)) return false;
+        }
+      }
+    }
+    if (expr.getExprType().typeFamily == TypeFamily.INTEGER) {
+      return true;
     }
     return false;
   }
