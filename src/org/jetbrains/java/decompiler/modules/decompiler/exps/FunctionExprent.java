@@ -140,6 +140,10 @@ public class FunctionExprent extends Exprent {
     public boolean isPostfixPPMM() {
       return this == IMM || this == IPP;
     }
+
+    public boolean isComparison() {
+      return this == EQ || this == NE || this == LT || this == GE || this == GT || this == LE;
+    }
   }
 
   private static final Set<FunctionType> ASSOCIATIVITY = new HashSet<>(Arrays.asList(
@@ -606,21 +610,80 @@ public class FunctionExprent extends Exprent {
         rightOperand = rtfCastObjectOperand(right, rightOperand, left.getExprType());
       }
 
+      // RTF: simplify boolean-vs-int comparisons. When one operand is boolean and the
+      // other is constant 0/1, Java doesn't allow `bool != 0`. Simplify to `bool`/`!bool`.
+      if (DecompilerContext.isRoundtripFidelity()
+          && (this.funcType == FunctionType.NE || this.funcType == FunctionType.EQ)) {
+        Exprent boolOp = null;
+        ConstExprent constOp = null;
+        boolean boolOnLeft = false;
+        if (left.getExprType().equals(VarType.VARTYPE_BOOLEAN) && right instanceof ConstExprent) {
+          boolOp = left; constOp = (ConstExprent) right; boolOnLeft = true;
+        } else if (right.getExprType().equals(VarType.VARTYPE_BOOLEAN) && left instanceof ConstExprent) {
+          boolOp = right; constOp = (ConstExprent) left; boolOnLeft = false;
+        }
+        if (boolOp != null && constOp.getValue() instanceof Integer) {
+          int val = (Integer) constOp.getValue();
+          if (val == 0 || val == 1) {
+            // NE 0 or EQ 1 → just the boolean; EQ 0 or NE 1 → negated
+            boolean negate = (this.funcType == FunctionType.EQ && val == 0)
+                || (this.funcType == FunctionType.NE && val == 1);
+            TextBuffer boolBuf = boolOp.toJava(indent);
+            if (negate) {
+              buf.append("!").append(boolBuf);
+            } else {
+              buf.append(boolBuf);
+            }
+            return buf;
+          }
+        }
+      }
+
       // Check for special cased integers on the right and left hand side, and then return if they are found.
       // This only applies to bitwise and as well as bitwise or functions.
       if (this.funcType == FunctionType.AND || this.funcType == FunctionType.OR) {
-        // Check if the right is an int constant and adjust accordingly
-        if (right instanceof ConstExprent && right.getExprType() == VarType.VARTYPE_INT) {
-          Integer value = (Integer) ((ConstExprent)right).getValue();
-          rightOperand.setLength(0);
-          rightOperand.append(IntHelper.adjustedIntRepresentation(value));
+        // RTF: when bitwise AND has a constant 0 operand and the other is a boolean
+        // comparison, the bytecode pattern is `iconst_0; comparison; iand`. In Java,
+        // `0 & (a != b)` has type issues (int & boolean). Render as `false & (expr)`
+        // instead, which is valid boolean & boolean and produces identical bytecode.
+        boolean convertedToBoolAnd = false;
+        if (DecompilerContext.isRoundtripFidelity() && this.funcType == FunctionType.AND) {
+          boolean leftIsZero = left instanceof ConstExprent
+              && Integer.valueOf(0).equals(((ConstExprent) left).getValue());
+          boolean rightIsZero = right instanceof ConstExprent
+              && Integer.valueOf(0).equals(((ConstExprent) right).getValue());
+          boolean rightIsBool = right.getExprType().equals(VarType.VARTYPE_BOOLEAN)
+              || (right instanceof FunctionExprent && ((FunctionExprent) right).funcType.isComparison());
+          boolean leftIsBool = left.getExprType().equals(VarType.VARTYPE_BOOLEAN)
+              || (left instanceof FunctionExprent && ((FunctionExprent) left).funcType.isComparison());
+
+          if (leftIsZero && rightIsBool) {
+            leftOperand.setLength(0);
+            leftOperand.append("false");
+            rightOperand = new TextBuffer().append("(").append(wrapOperandString(right, true, indent, true)).append(")");
+            convertedToBoolAnd = true;
+          } else if (rightIsZero && leftIsBool) {
+            rightOperand.setLength(0);
+            rightOperand.append("false");
+            leftOperand = new TextBuffer().append("(").append(wrapOperandString(left, false, indent, true)).append(")");
+            convertedToBoolAnd = true;
+          }
         }
 
-        // Check if the left is an int constant and adjust accordingly
-        if (left instanceof ConstExprent && left.getExprType() == VarType.VARTYPE_INT) {
-          Integer value = (Integer) ((ConstExprent)left).getValue();
-          leftOperand.setLength(0);
-          leftOperand.append(IntHelper.adjustedIntRepresentation(value));
+        if (!convertedToBoolAnd) {
+          // Check if the right is an int constant and adjust accordingly
+          if (right instanceof ConstExprent && right.getExprType() == VarType.VARTYPE_INT) {
+            Integer value = (Integer) ((ConstExprent)right).getValue();
+            rightOperand.setLength(0);
+            rightOperand.append(IntHelper.adjustedIntRepresentation(value));
+          }
+
+          // Check if the left is an int constant and adjust accordingly
+          if (left instanceof ConstExprent && left.getExprType() == VarType.VARTYPE_INT) {
+            Integer value = (Integer) ((ConstExprent)left).getValue();
+            leftOperand.setLength(0);
+            leftOperand.append(IntHelper.adjustedIntRepresentation(value));
+          }
         }
       }
 
