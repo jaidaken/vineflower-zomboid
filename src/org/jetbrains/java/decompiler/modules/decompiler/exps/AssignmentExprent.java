@@ -259,6 +259,10 @@ public class AssignmentExprent extends Exprent {
 
     if (condType == null) {
       buffer.append(" = ");
+      // Save position right after " = " for RTF re-rendering blocks below.
+      // Using lastIndexOf("= ") is wrong because "= " also matches inside
+      // comparison operators (==, !=, <=, >=) within lambda bodies.
+      final int assignEndPos = buffer.length();
 
       if (forceNarrowingCast) {
         // Directly emit the narrowing cast and RHS without going through getCastedExprent,
@@ -326,29 +330,25 @@ public class AssignmentExprent extends Exprent {
                           && DecompilerContext.getStructContext().instanceOf(
                               leftType.value, descReturnType.value)));
               if (descriptorReturnsWider) {
-                // Check if the buffer already has a cast after the "= "
-                String rendered = buffer.toString();
-                int eqIdx = rendered.lastIndexOf("= ");
-                if (eqIdx >= 0) {
-                  String afterEq = rendered.substring(eqIdx + 2).trim();
-                  if (!afterEq.startsWith("(")) {
-                    // Re-render with explicit cast.
-                    // For primitives (int, long), cast to the BOXED type (Integer, Long)
-                    // because (int)Object is invalid but (Integer)Object auto-unboxes.
-                    VarType castType = leftType;
-                    if (leftType.type != CodeType.OBJECT && leftType.type != CodeType.NULL) {
-                      // Primitive LHS — find the boxed equivalent
-                      for (java.util.Map.Entry<VarType, VarType> e : VarType.UNBOXING_TYPES.entrySet()) {
-                        if (e.getValue().equals(leftType)) {
-                          castType = e.getKey();
-                          break;
-                        }
+                // Check if the buffer already has a cast after the assignment
+                String afterAssign = buffer.toString().substring(assignEndPos).trim();
+                if (!afterAssign.startsWith("(")) {
+                  // Re-render with explicit cast.
+                  // For primitives (int, long), cast to the BOXED type (Integer, Long)
+                  // because (int)Object is invalid but (Integer)Object auto-unboxes.
+                  VarType castType = leftType;
+                  if (leftType.type != CodeType.OBJECT && leftType.type != CodeType.NULL) {
+                    // Primitive LHS — find the boxed equivalent
+                    for (java.util.Map.Entry<VarType, VarType> e : VarType.UNBOXING_TYPES.entrySet()) {
+                      if (e.getValue().equals(leftType)) {
+                        castType = e.getKey();
+                        break;
                       }
                     }
-                    buffer.setLength(eqIdx + 2);
-                    buffer.append("(").appendCastTypeName(castType).append(")");
-                    buffer.append(right.toJava(indent));
                   }
+                  buffer.setLength(assignEndPos);
+                  buffer.append("(").appendCastTypeName(castType).append(")");
+                  buffer.append(right.toJava(indent));
                 }
               }
             }
@@ -371,29 +371,21 @@ public class AssignmentExprent extends Exprent {
           if (leftType.typeFamily == TypeFamily.INTEGER
               && !leftType.equals(VarType.VARTYPE_BOOLEAN)
               && rhsIsBoolean) {
-            String rendered = buffer.toString();
-            int eqIdx = rendered.lastIndexOf("= ");
-            if (eqIdx >= 0) {
-              String afterEq = rendered.substring(eqIdx + 2).trim();
-              buffer.setLength(eqIdx + 2);
-              buffer.append("(").append(afterEq).append(") ? 1 : 0");
-            }
+            String afterAssign = buffer.toString().substring(assignEndPos);
+            buffer.setLength(assignEndPos);
+            buffer.append("(").append(afterAssign.trim()).append(") ? 1 : 0");
           }
 
           // RTF: Object-to-specific assignment fix. When a VarExprent RHS renders
           // as Object-typed (name starts with "var") but the LHS is specifically
           // typed, add a cast. E.g., IsoGridSquare square1 = var0;
           if (right instanceof VarExprent) {
-            String rendered2 = buffer.toString();
-            int eqIdx2 = rendered2.lastIndexOf("= ");
-            if (eqIdx2 >= 0) {
-              String afterEq2 = rendered2.substring(eqIdx2 + 2).trim();
-              if (!afterEq2.startsWith("(") && afterEq2.startsWith("var")
-                  && leftType.type == CodeType.OBJECT
-                  && !"java/lang/Object".equals(leftType.value)) {
-                buffer.setLength(eqIdx2 + 2);
-                buffer.append("(").appendCastTypeName(leftType).append(")").append(afterEq2);
-              }
+            String afterAssign2 = buffer.toString().substring(assignEndPos).trim();
+            if (!afterAssign2.startsWith("(") && afterAssign2.startsWith("var")
+                && leftType.type == CodeType.OBJECT
+                && !"java/lang/Object".equals(leftType.value)) {
+              buffer.setLength(assignEndPos);
+              buffer.append("(").appendCastTypeName(leftType).append(")").append(afterAssign2);
             }
           }
         }
