@@ -2062,6 +2062,19 @@ public class ExprProcessor implements CodeConstants {
       }
       if (cast) {
         buffer.append('(').appendCastTypeName(leftType).append(')');
+        // RTF: when casting to a generic type and the source is Object or a
+        // subtype with different generic args, add an intermediate raw-type cast.
+        // Javac may infer a more specific source type (e.g., HashSet<Object>
+        // from raw method references), causing generic invariance errors.
+        if (DecompilerContext.isRoundtripFidelity()
+            && leftType instanceof org.jetbrains.java.decompiler.struct.gen.generics.GenericType
+            && !((org.jetbrains.java.decompiler.struct.gen.generics.GenericType)leftType).getArguments().isEmpty()) {
+          VarType actualType = exprent.getExprType();
+          if (actualType.type == CodeType.OBJECT && "java/lang/Object".equals(actualType.value)) {
+            buffer.append('(').appendCastTypeName(
+                new VarType(CodeType.OBJECT, leftType.arrayDim, leftType.value)).append(')');
+          }
+        }
       }
     }
 

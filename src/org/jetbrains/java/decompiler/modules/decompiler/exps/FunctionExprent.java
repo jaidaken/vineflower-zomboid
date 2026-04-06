@@ -831,21 +831,40 @@ public class FunctionExprent extends Exprent {
                 castExprBuf = castExprBuf.enclose("(Object)", "");
               }
             }
-            // RTF: generic invariance - when the inferred source type has the same
-            // base class as the cast target but different type arguments (e.g.,
-            // List<Biome> to List<IBiome>), insert an intermediate raw-type cast
-            // to satisfy Java's generic invariance rules.
+            // RTF: generic invariance - insert intermediate raw-type cast when:
+            // 1. Source and target have the same base class (or subtype) but different
+            //    type arguments (e.g., List<Biome> to List<IBiome>).
+            // 2. Source is Object but target is generic - javac may infer a more specific
+            //    source type from context (e.g., HashSet<Object> from raw collect),
+            //    causing invariance errors.
             VarType srcInferred = lstOperands.get(0).getInferredExprType(null);
+            boolean needsRawIntermediate = false;
             if (srcInferred instanceof GenericType && targetType instanceof GenericType
-                && srcInferred.value != null && srcInferred.value.equals(targetType.value)) {
-              GenericType srcGen = (GenericType) srcInferred;
-              GenericType tgtGen = (GenericType) targetType;
-              if (!srcGen.getArguments().isEmpty() && !tgtGen.getArguments().isEmpty()
-                  && !srcGen.getArguments().equals(tgtGen.getArguments())) {
-                String rawName = ExprProcessor.getCastTypeName(
-                    new VarType(CodeType.OBJECT, targetType.arrayDim, targetType.value));
-                castExprBuf = castExprBuf.enclose("(" + rawName + ")", "");
+                && srcInferred.value != null && targetType.value != null) {
+              boolean sameOrSubtype = srcInferred.value.equals(targetType.value)
+                  || (DecompilerContext.getStructContext() != null
+                      && DecompilerContext.getStructContext().instanceOf(srcInferred.value, targetType.value));
+              if (sameOrSubtype) {
+                GenericType srcGen = (GenericType) srcInferred;
+                GenericType tgtGen = (GenericType) targetType;
+                if (!srcGen.getArguments().isEmpty() && !tgtGen.getArguments().isEmpty()
+                    && !srcGen.getArguments().equals(tgtGen.getArguments())) {
+                  needsRawIntermediate = true;
+                }
               }
+            }
+            // Object source with generic target: javac may infer a more specific
+            // incompatible generic type (e.g., from raw method references in collect)
+            if (!needsRawIntermediate
+                && "java/lang/Object".equals(sourceType.value)
+                && targetType instanceof GenericType
+                && !((GenericType)targetType).getArguments().isEmpty()) {
+              needsRawIntermediate = true;
+            }
+            if (needsRawIntermediate) {
+              String rawName = ExprProcessor.getCastTypeName(
+                  new VarType(CodeType.OBJECT, targetType.arrayDim, targetType.value));
+              castExprBuf = castExprBuf.enclose("(" + rawName + ")", "");
             }
           }
           return buf.encloseWithParens().append(castExprBuf);
