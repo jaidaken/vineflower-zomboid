@@ -1331,6 +1331,26 @@ public class InvocationExprent extends Exprent {
           ((ConstExprent) lstParameters.get(i)).forceBooleanToInt();
         }
 
+        // RTF: detect lambda parameters passed to methods on raw generic receivers.
+        // When the receiver is raw (e.g., raw TimSort), the Comparator param is raw,
+        // so explicit lambda types like (IsoGridSquare o1, IsoGridSquare o2) are invalid.
+        // Flag the lambda for ClassWriter to suppress explicit types and add a cast.
+        if (DecompilerContext.isRoundtripFidelity()
+            && lstParameters.get(i) instanceof NewExprent
+            && ((NewExprent) lstParameters.get(i)).isLambda()
+            && instance != null
+            && !isStatic) {
+          VarType instType = instance.getInferredExprType(null);
+          if (!instType.isGeneric() && instType.type == CodeType.OBJECT && instType.value != null) {
+            StructClass instClass = DecompilerContext.getStructContext().getClass(instType.value);
+            if (instClass != null && instClass.getSignature() != null
+                && !instClass.getSignature().fparameters.isEmpty()) {
+              // Receiver is raw but class is generic - lambda needs cast
+              ((NewExprent) lstParameters.get(i)).setRawReceiverLambdaCast(true);
+            }
+          }
+        }
+
         // 'byte' and 'short' literals need an explicit narrowing type cast when used as a parameter
         ExprProcessor.getCastedExprent(lstParameters.get(i), types[i], buff, indent, ambiguous ? ExprProcessor.NullCastType.CAST : ExprProcessor.NullCastType.DONT_CAST_AT_ALL, ambiguous, true, true);
 

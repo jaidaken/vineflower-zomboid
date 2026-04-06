@@ -42,6 +42,9 @@ public class NewExprent extends Exprent {
   private boolean isVarArgParam;
   private boolean anonymous;
   private boolean lambda;
+  // RTF: set by InvocationExprent when this lambda is passed to a method on a raw generic receiver.
+  // ClassWriter uses this to suppress explicit types and add a cast to the parameterized interface.
+  private boolean rawReceiverLambdaCast;
   private boolean methodReference = false;
   private boolean enumConst;
   private List<VarType> genericArgs = new ArrayList<>();
@@ -416,7 +419,7 @@ public class NewExprent extends Exprent {
           }
         }
         try {
-          new ClassWriter().classLambdaToJava(child, buf, methodObject, indent);
+          new ClassWriter().classLambdaToJava(child, buf, methodObject, indent, rawReceiverLambdaCast);
         } finally {
           if (pushedOverrides) {
             contentMethod.varproc.popNameOverrides();
@@ -896,6 +899,14 @@ public class NewExprent extends Exprent {
 
   public boolean isLambda() {
     return lambda;
+  }
+
+  public boolean isRawReceiverLambdaCast() {
+    return rawReceiverLambdaCast;
+  }
+
+  public void setRawReceiverLambdaCast(boolean rawReceiverLambdaCast) {
+    this.rawReceiverLambdaCast = rawReceiverLambdaCast;
   }
 
   /**

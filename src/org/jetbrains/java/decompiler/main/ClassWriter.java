@@ -149,6 +149,10 @@ public class ClassWriter implements StatementWriter {
   }
 
   public void classLambdaToJava(ClassNode node, TextBuffer buffer, Exprent method_object, int indent) {
+    classLambdaToJava(node, buffer, method_object, indent, false);
+  }
+
+  public void classLambdaToJava(ClassNode node, TextBuffer buffer, Exprent method_object, int indent, boolean rawReceiverCast) {
     ClassWrapper wrapper = node.getWrapper();
     if (wrapper == null) {
       return;
@@ -288,8 +292,62 @@ public class ClassWriter implements StatementWriter {
               }
               hasExplicitTypes = allParamsMatch;
             }
+            // RTF: raw receiver cast - suppress explicit types and add a cast to the
+            // parameterized functional interface instead. This makes Java infer the
+            // lambda param types from the cast target.
+            if (rawReceiverCast && hasExplicitTypes && md_lambda.params.length > 0) {
+              hasExplicitTypes = false;
+              VarType funcIface = node.anonymousClassType;
+              if (funcIface != null && funcIface.value != null) {
+                StructClass ifaceClass = DecompilerContext.getStructContext().getClass(funcIface.value);
+                if (ifaceClass != null && ifaceClass.getSignature() != null) {
+                  // Map the functional interface's type variables to concrete types
+                  // using the SAM method and the lambda's instantiated method descriptor.
+                  int numTypeParams = ifaceClass.getSignature().fparameters.size();
+                  // Find SAM method and map type vars to concrete types from md_lambda
+                  Map<String, VarType> typeVarMap = new java.util.LinkedHashMap<>();
+                  for (StructMethod sam : ifaceClass.getMethods()) {
+                    if (!sam.hasModifier(CodeConstants.ACC_STATIC) && sam.getInstructionSequence() == null
+                        && sam.getSignature() != null) {
+                      // Map params
+                      for (int pi = 0; pi < sam.getSignature().parameterTypes.size() && pi < md_lambda.params.length; pi++) {
+                        VarType sigParam = sam.getSignature().parameterTypes.get(pi);
+                        if (sigParam.type == CodeType.GENVAR) {
+                          typeVarMap.putIfAbsent(sigParam.value, md_lambda.params[pi]);
+                        }
+                      }
+                      // Map return type
+                      VarType sigRet = sam.getSignature().returnType;
+                      if (sigRet != null && sigRet.type == CodeType.GENVAR && md_lambda.ret.type != CodeType.VOID) {
+                        typeVarMap.putIfAbsent(sigRet.value, md_lambda.ret);
+                      }
+                      break;
+                    }
+                  }
+                  // Build the cast with all type args in declaration order
+                  if (typeVarMap.size() == numTypeParams) {
+                    String ifaceName = DecompilerContext.getImportCollector()
+                        .getShortNameInClassContext(ExprProcessor.buildJavaClassName(funcIface.value));
+                    StringBuilder cast = new StringBuilder("(").append(ifaceName).append("<");
+                    boolean first = true;
+                    for (String fp : ifaceClass.getSignature().fparameters) {
+                      if (!first) cast.append(", ");
+                      VarType mapped = typeVarMap.get(fp);
+                      if (mapped != null) {
+                        cast.append(ExprProcessor.getCastTypeName(mapped));
+                      } else {
+                        cast.append("Object");
+                      }
+                      first = false;
+                    }
+                    cast.append(">)");
+                    buffer.append(cast.toString());
+                  }
+                }
+              }
+            }
             boolean lambdaParametersNeedParentheses = md_lambda.params.length != 1 || hasExplicitTypes;
-  
+
             if (lambdaParametersNeedParentheses) {
               buffer.append('(');
             }
