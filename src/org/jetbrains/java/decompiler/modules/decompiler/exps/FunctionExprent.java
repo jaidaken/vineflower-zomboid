@@ -804,7 +804,24 @@ public class FunctionExprent extends Exprent {
         return buf.append(wrapOperandString(lstOperands.get(0), true, indent).append(funcType.operator));
       case CAST:
         if (!needsCast) {
-          return buf.append(lstOperands.get(0).toJava(indent));
+          // RTF: force rendering when source is Object and target is generic.
+          // Without the cast, javac may infer a more specific incompatible generic
+          // type (e.g., HashSet<Object> from raw method references in collect),
+          // causing generic invariance errors. The intermediate raw cast in the
+          // full rendering path produces (Set<Integer>)(Set)expr which is safe.
+          boolean forceGenericCast = false;
+          if (DecompilerContext.isRoundtripFidelity() && lstOperands.size() >= 2) {
+            VarType srcType = lstOperands.get(0).getExprType();
+            VarType tgtType = lstOperands.get(1).getExprType();
+            if (srcType.type == CodeType.OBJECT && "java/lang/Object".equals(srcType.value)
+                && tgtType instanceof GenericType
+                && !((GenericType) tgtType).getArguments().isEmpty()) {
+              forceGenericCast = true;
+            }
+          }
+          if (!forceGenericCast) {
+            return buf.append(lstOperands.get(0).toJava(indent));
+          }
         }
         for (int i = 1; i < lstOperands.size(); i++) {
           if (i > 1) {
