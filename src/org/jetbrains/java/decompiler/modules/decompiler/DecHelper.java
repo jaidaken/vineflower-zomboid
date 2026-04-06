@@ -68,48 +68,6 @@ public final class DecHelper {
       return false;
     }
 
-    // RTF: reject if this is a loop condition. A loop condition block has
-    // direct predecessors from HIGHER bytecode offsets (backward jumps from
-    // the loop body end). Check if exactly one successor's reachable set
-    // contains such a predecessor, indicating a loop body on that branch.
-    if (DecompilerContext.isRoundtripFidelity() && setDest.size() == 2) {
-      // Find direct predecessors with higher bytecode offset (backward jumps)
-      Set<Statement> backPreds = new HashSet<>();
-      for (Statement pred : head.getNeighboursSet(StatEdge.TYPE_REGULAR, EdgeDirection.BACKWARD)) {
-        if (pred.getBasichead().id > head.getBasichead().id) {
-          backPreds.add(pred);
-        }
-      }
-      if (!backPreds.isEmpty()) {
-        // Check which successors can reach a back-edge predecessor
-        int cycleCount = 0;
-        for (Statement succ : setDest) {
-          Set<Statement> visited = new HashSet<>();
-          java.util.LinkedList<Statement> queue = new java.util.LinkedList<>();
-          queue.add(succ);
-          visited.add(succ);
-          boolean reachesBackPred = false;
-          while (!queue.isEmpty() && !reachesBackPred) {
-            Statement cur = queue.remove();
-            if (backPreds.contains(cur)) {
-              reachesBackPred = true;
-              break;
-            }
-            for (Statement next : cur.getNeighboursSet(StatEdge.TYPE_REGULAR, EdgeDirection.FORWARD)) {
-              if (!visited.contains(next) && next != head) {
-                visited.add(next);
-                queue.add(next);
-              }
-            }
-          }
-          if (reachesBackPred) cycleCount++;
-        }
-        if (cycleCount == 1) {
-          return false;
-        }
-      }
-    }
-
     while (true) {
 
       lst.clear();
