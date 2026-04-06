@@ -925,6 +925,18 @@ public class InvocationExprent extends Exprent {
               && DecompilerContext.getStructContext().instanceOf(rightType.value, classname)) {
             appendInstCast(buf, leftType, res);
           }
+          // RTF: cast to raw type when the instance has unbounded wildcards AND
+          // the method's descriptor uses the class's type parameters in array or
+          // generic positions. The wildcard capture makes T[] incompatible with
+          // CAP#1[], but raw erasure allows Object[] to pass. Only apply when
+          // the method signature actually references generic type variables in
+          // its parameter types (not just Object parameters like Map.get).
+          else if (DecompilerContext.isRoundtripFidelity()
+              && rightType instanceof GenericType gt
+              && gt.getArguments() != null && gt.getArguments().contains(null)
+              && methodUsesClassTypeParams(classname)) {
+            buf.append("((").appendCastTypeName(new VarType(CodeType.OBJECT, 0, classname)).append(")").append(res).append(")");
+          }
           else {
             buf.append(res);
           }
@@ -1606,6 +1618,38 @@ public class InvocationExprent extends Exprent {
     String pkg1 = class1.substring(0, pos1);
     String pkg2 = class2.substring(0, pos2);
     return pkg1.equals(pkg2);
+  }
+
+  /**
+   * Check if the invoked method's parameter types reference the declaring class's
+   * type parameters (e.g., QuickSelect<T>.select(T[], Comparator<T>, ...) uses T
+   * from the class). When the instance has a wildcard type like QuickSelect<?>,
+   * these type params become captured wildcards that are incompatible with the
+   * caller's type variables.
+   */
+  private boolean methodUsesClassTypeParams(String className) {
+    StructClass cl = DecompilerContext.getStructContext().getClass(className);
+    if (cl == null || cl.getSignature() == null || cl.getSignature().fparameters.isEmpty()) {
+      return false;
+    }
+    // Get the class's declared type parameter names
+    List<String> classTypeParams = cl.getSignature().fparameters;
+
+    // Check if the method's descriptor has any parameter with generic array type or
+    // parameterized type - a simple heuristic: if the erased descriptor has [Ljava/lang/Object;
+    // (array of Object = erased generic array), the method likely uses class type params
+    StructMethod mt = cl.getMethod(InterpreterUtil.makeUniqueKey(name, stringDescriptor));
+    if (mt != null && mt.getSignature() != null) {
+      for (VarType paramType : mt.getSignature().parameterTypes) {
+        if (paramType.type == CodeType.GENVAR && classTypeParams.contains(paramType.value)) {
+          return true;
+        }
+        if (paramType.arrayDim > 0 && paramType.type == CodeType.GENVAR) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
