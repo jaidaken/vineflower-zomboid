@@ -1755,6 +1755,19 @@ public class ExprProcessor implements CodeConstants {
       lst = inlineDupFieldReceiver(lst);
     }
 
+    // RTF: remove synthetic Objects.requireNonNull(EnclosingClass.this) in inner class
+    // constructors. Javac adds its own null check, so the explicit one is redundant.
+    if (DecompilerContext.isRoundtripFidelity() && lst.size() >= 2) {
+      lst = new ArrayList<>(lst); // make mutable copy
+      for (int ri = lst.size() - 2; ri >= 0; ri--) {
+        Exprent curr = lst.get(ri);
+        Exprent next = lst.get(ri + 1);
+        if (isInnerClassInitRequireNonNull(curr, next)) {
+          lst.remove(ri);
+        }
+      }
+    }
+
     for (Exprent expr : lst) {
       if (buf.length() > 0 && expr instanceof VarExprent && ((VarExprent)expr).isClassDef()) {
         // separates local class definition from previous statements
@@ -1787,6 +1800,40 @@ public class ExprProcessor implements CodeConstants {
     }
 
     return buf;
+  }
+
+  /**
+   * RTF: detect synthetic Objects.requireNonNull(X) before a super()/this() call
+   * in a non-static inner class constructor. Javac always adds its own null check
+   * for the outer reference, so the explicit one produces a duplicate.
+   */
+  private static boolean isInnerClassInitRequireNonNull(Exprent current, Exprent next) {
+    // Current must be an invocation of Objects.requireNonNull
+    InvocationExprent inv = null;
+    if (current instanceof InvocationExprent ie) {
+      inv = ie;
+    }
+    if (inv == null || !inv.isStatic()
+        || !"java/util/Objects".equals(inv.getClassname())
+        || !"requireNonNull".equals(inv.getName())
+        || !"(Ljava/lang/Object;)Ljava/lang/Object;".equals(inv.getStringDescriptor())) {
+      return false;
+    }
+
+    // Next must be a super() or this() constructor call
+    if (!(next instanceof InvocationExprent nextInv) || nextInv.getFunctype() != InvocationExprent.Type.INIT) {
+      return false;
+    }
+
+    // We're in a non-static inner class constructor
+    org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode currentNode =
+        (org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode) DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+    if (currentNode == null || currentNode.type == org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode.Type.ROOT
+        || (currentNode.access & CodeConstants.ACC_STATIC) != 0) {
+      return false;
+    }
+
+    return true;
   }
 
   public static ConstExprent getDefaultArrayValue(VarType arrType) {
