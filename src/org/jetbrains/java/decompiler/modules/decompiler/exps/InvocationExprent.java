@@ -516,7 +516,8 @@ public class InvocationExprent extends Exprent {
                   if (!combined.containsKey(k))
                     combined.put(k, v);
                 });
-                VarType paramUB = paramType.remap(hierarchyMap).remap(combined);
+                VarType paramRemapped = paramType.remap(hierarchyMap);
+                VarType paramUB = paramRemapped != null ? paramRemapped.remap(combined) : null;
 
                 VarType argtype;
                 if (parameter instanceof FunctionExprent && ((FunctionExprent)parameter).getFuncType() == FunctionType.CAST) {
@@ -542,7 +543,8 @@ public class InvocationExprent extends Exprent {
                     // This will let us remap with our new argtype in a simple fashion.
                     GenericType baseType = ((GenericType) instType).findBaseType();
                     if (baseType != null) {
-                      this.remappedInstType = baseType.remap(hierarchyMap).remap(combined);
+                      VarType baseRemapped = baseType.remap(hierarchyMap);
+                      this.remappedInstType = baseRemapped != null ? baseRemapped.remap(combined) : null;
                     }
                   }
                 }
@@ -1221,7 +1223,8 @@ public class InvocationExprent extends Exprent {
           }
 
           VarType rawSigType = desc.getSignature().parameterTypes.get(y++);
-          VarType type = rawSigType.remap(hierarchyMap).remap(genericsMap);
+          VarType remapped = rawSigType.remap(hierarchyMap);
+          VarType type = remapped != null ? remapped.remap(genericsMap) : null;
           // RTF: when remap resolves a GENVAR (TypeK, V) to Object, preserve
           // the original GENVAR if it's declared by the current class/method.
           // This ensures proper type variable rendering for casts and parameter types.
@@ -1230,7 +1233,7 @@ public class InvocationExprent extends Exprent {
           // (which would leak internal type vars to the call site).
           if (DecompilerContext.isRoundtripFidelity()
               && rawSigType.type == CodeType.GENVAR
-              && type.type == CodeType.OBJECT && "java/lang/Object".equals(type.value)
+              && type != null && type.type == CodeType.OBJECT && "java/lang/Object".equals(type.value)
               && namedGens.contains(rawSigType)) {
             // Check: is this GENVAR from the called method's own type params?
             boolean isCalledMethodTypeParam = false;
@@ -1607,7 +1610,7 @@ public class InvocationExprent extends Exprent {
 
   /**
    * Check if a primitive widening conversion exists from source to target.
-   * Java allows: byte→short→int→long→float→double, char→int, int→float, etc.
+   * Java allows: byte->short->int->long->float->double, char->int, int->float, etc.
    */
   private static boolean isWideningConversion(VarType source, VarType target) {
     if (source.type == target.type) return true;
