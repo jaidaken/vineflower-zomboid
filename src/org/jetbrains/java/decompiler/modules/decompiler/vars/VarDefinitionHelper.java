@@ -2864,7 +2864,7 @@ public class VarDefinitionHelper {
    * a loop body). remapClashingNames processes children independently and can clear
    * names between siblings, missing the clash.
    */
-  private void fixRemainingDuplicateDefinitions(Statement root) {
+  void fixRemainingDuplicateDefinitions(Statement root) {
     Set<String> names = new HashSet<>();
     Map<String, VarVersionPair> nameToVvp = new HashMap<>();
     walkForDuplicateDefs(root, names, nameToVvp);

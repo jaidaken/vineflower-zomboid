@@ -831,6 +831,22 @@ public class FunctionExprent extends Exprent {
                 castExprBuf = castExprBuf.enclose("(Object)", "");
               }
             }
+            // RTF: generic invariance - when the inferred source type has the same
+            // base class as the cast target but different type arguments (e.g.,
+            // List<Biome> to List<IBiome>), insert an intermediate raw-type cast
+            // to satisfy Java's generic invariance rules.
+            VarType srcInferred = lstOperands.get(0).getInferredExprType(null);
+            if (srcInferred instanceof GenericType && targetType instanceof GenericType
+                && srcInferred.value != null && srcInferred.value.equals(targetType.value)) {
+              GenericType srcGen = (GenericType) srcInferred;
+              GenericType tgtGen = (GenericType) targetType;
+              if (!srcGen.getArguments().isEmpty() && !tgtGen.getArguments().isEmpty()
+                  && !srcGen.getArguments().equals(tgtGen.getArguments())) {
+                String rawName = ExprProcessor.getCastTypeName(
+                    new VarType(CodeType.OBJECT, targetType.arrayDim, targetType.value));
+                castExprBuf = castExprBuf.enclose("(" + rawName + ")", "");
+              }
+            }
           }
           return buf.encloseWithParens().append(castExprBuf);
         }

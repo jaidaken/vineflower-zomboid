@@ -100,6 +100,13 @@ public class FieldExprent extends Exprent {
               ret = getExprType();
             }
           }
+        } else if (!instType.isGeneric() && ret.isGeneric()
+                   && instance instanceof FunctionExprent
+                   && ((FunctionExprent)instance).getFuncType() == FunctionExprent.FunctionType.CAST) {
+          // Instance is explicitly cast to a raw type via checkcast.
+          // Java erases field types when accessed through raw references,
+          // so return the raw descriptor type to prevent misplaced casts.
+          ret = getExprType();
         }
       }
 

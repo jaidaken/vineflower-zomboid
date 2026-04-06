@@ -132,6 +132,11 @@ public class VarProcessor {
         this.clashingNames.put(e.getKey(), e.getValue());
       }
     }
+
+    // Post-pass: catch duplicate definitions that remapClashingNames missed.
+    // This is needed after setDebugVarNames assigns LVT names that can create
+    // same-scope duplicates (e.g., slot reuse with the same LVT name).
+    vardef.fixRemainingDuplicateDefinitions(root);
   }
 
   public @Nullable Integer getVarOriginalIndex(int index) {
