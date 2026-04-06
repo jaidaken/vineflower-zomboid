@@ -2934,8 +2934,18 @@ public class VarDefinitionHelper {
         walkForDuplicateDefs(child, new HashSet<>(parentNames), new HashMap<>(nameToVvp));
       }
     } else if (stat instanceof SwitchStatement) {
+      // The switch head (basichead) contains pre-switch code like the discriminator
+      // variable. Process it in the parent scope so its definitions are visible
+      // to siblings that come after the switch.
+      BasicBlockStatement head = stat.getBasichead();
+      if (head != null && head.getExprents() != null) {
+        for (Exprent expr : head.getExprents()) {
+          checkAndRenameDuplicateDef(expr, parentNames, nameToVvp);
+        }
+      }
       // Each case branch is an independent scope
       for (Statement child : children) {
+        if (child == head) continue; // already processed above
         walkForDuplicateDefs(child, new HashSet<>(parentNames), new HashMap<>(nameToVvp));
       }
     } else {
