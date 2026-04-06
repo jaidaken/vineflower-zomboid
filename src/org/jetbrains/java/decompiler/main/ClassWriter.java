@@ -1821,6 +1821,7 @@ public class ClassWriter implements StatementWriter {
         }
       }
     }
+
   }
 
   private static void scanAssignmentsForDualType(Exprent expr, Map<String, Boolean> hasBool, Map<String, Boolean> hasInt) {

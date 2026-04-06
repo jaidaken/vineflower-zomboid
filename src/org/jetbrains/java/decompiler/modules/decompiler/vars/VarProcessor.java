@@ -42,6 +42,12 @@ public class VarProcessor {
   public void markDualTypedVar(String name) { if (name != null) dualTypedVarNames.add(name); }
   public boolean isDualTypedVar(String name) { return name != null && dualTypedVarNames.contains(name); }
 
+  // RTF: variables declared with 'var' and int-constant initializer (0/1).
+  // Javac infers int from 'var x = 0', so bare 'if (x)' fails. IfExprent adds '!= 0'.
+  private final Set<String> varIntInitNames = new HashSet<>();
+  public void markVarIntInit(String name) { if (name != null) varIntInitNames.add(name); }
+  public boolean isVarIntInit(String name) { return name != null && varIntInitNames.contains(name); }
+
   // Per-lambda name overrides, active only during rendering of a specific lambda
   // that shares this method's synthetic body with another lambda.
   private @Nullable Map<VarVersionPair, String> activeNameOverrides;

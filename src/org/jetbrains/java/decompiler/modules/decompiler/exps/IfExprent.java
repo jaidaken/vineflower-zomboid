@@ -153,21 +153,28 @@ public class IfExprent extends Exprent {
       condition.getInferredExprType(VarType.VARTYPE_BOOLEAN);
     }
 
-    // RTF: if condition is a bare VarExprent with non-boolean type after all
-    // simplification passes (variable merging changed boolean to int), wrap
-    // in explicit "!= 0" for rendering only.
+    // RTF: if condition is a bare VarExprent with non-boolean type, wrap in "!= 0".
     Exprent renderCond = condition;
     if (DecompilerContext.isRoundtripFidelity() && condition instanceof VarExprent) {
       VarType ct = condition.getExprType();
       VarExprent condVar = (VarExprent) condition;
       boolean isDualTyped = condVar.getProcessor() != null
           && condVar.getProcessor().isDualTypedVar(condVar.getName());
+      boolean isVarIntInit = condVar.getProcessor() != null
+          && condVar.getProcessor().isVarIntInit(condVar.getName());
       if ((ct != null && ct.type != org.jetbrains.java.decompiler.struct.gen.CodeType.BOOLEAN
            && ct.typeFamily == org.jetbrains.java.decompiler.struct.gen.TypeFamily.INTEGER)
-          || isDualTyped) {
-        renderCond = new FunctionExprent(FunctionExprent.FunctionType.NE,
+          || isDualTyped || isVarIntInit) {
+        FunctionExprent ne = new FunctionExprent(FunctionExprent.FunctionType.NE,
           java.util.Arrays.asList(condition, new ConstExprent(VarType.VARTYPE_INT, 0, null)),
           condition.bytecode);
+        // For varIntInit variables (where 'var x = 0' was set during rendering),
+        // prevent NE simplification that would collapse bool != 0 back to bare bool.
+        // isDualTyped alone is not sufficient - those vars may still render as boolean.
+        if (isVarIntInit) {
+          ne.setForceLiteral(true);
+        }
+        renderCond = ne;
       }
     }
 

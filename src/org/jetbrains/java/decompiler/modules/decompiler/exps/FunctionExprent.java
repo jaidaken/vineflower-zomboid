@@ -153,6 +153,9 @@ public class FunctionExprent extends Exprent {
   private VarType implicitType;
   private final List<Exprent> lstOperands;
   private boolean needsCast = true;
+  // When true, prevent NE/EQ simplification that collapses bool != 0 to bare bool.
+  // Used by IfExprent for variables declared with 'var' and int-constant init.
+  private boolean forceLiteral = false;
   private boolean disableNewlineGroupCreation = false;
 
   public FunctionExprent(FunctionType funcType, ListStack<Exprent> stack, BitSet bytecodeOffsets) {
@@ -716,7 +719,8 @@ public class FunctionExprent extends Exprent {
       // RTF: simplify boolean-vs-int comparisons for NE/EQ.
       // When one operand is boolean (from LVT or expression type) and the other
       // is constant 0/1, Java doesn't allow `bool != 0`. Simplify to `bool`/`!bool`.
-      if (DecompilerContext.isRoundtripFidelity()
+      // Skip when forceLiteral is set (synthetic NE from IfExprent for var-int-init vars).
+      if (DecompilerContext.isRoundtripFidelity() && !forceLiteral
           && (funcType == FunctionType.NE || funcType == FunctionType.EQ)) {
         Exprent boolOp = null;
         ConstExprent constOp = null;
@@ -1260,6 +1264,10 @@ public class FunctionExprent extends Exprent {
 
   public boolean doesCast() {
     return needsCast;
+  }
+
+  public void setForceLiteral(boolean forceLiteral) {
+    this.forceLiteral = forceLiteral;
   }
 
   public void setNeedsCast(boolean needsCast) {

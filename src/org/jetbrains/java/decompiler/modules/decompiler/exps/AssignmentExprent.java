@@ -134,6 +134,9 @@ public class AssignmentExprent extends Exprent {
         leftType = VarType.VARTYPE_INT;
         if (leftVar.isDefinition()) {
           leftVar.setUseVar(true);
+          // Mark as varIntInit so IfExprent adds '!= 0' with forceLiteral.
+          // These variables render as 'var x = 0' (javac infers int).
+          leftVar.getProcessor().markVarIntInit(leftVar.getName());
         }
       }
     }
@@ -163,6 +166,7 @@ public class AssignmentExprent extends Exprent {
 
     // For boolean vars initialized with int constants: use 'var' to let javac infer int.
     // This applies to ALL boolean vars with ICONST_0/1 init (keeps existing behavior).
+    // Mark as varIntInit so IfExprent can add '!= 0' when the var is used as a condition.
     if (!isDualTyped && left instanceof VarExprent && ((VarExprent) left).isDefinition()
         && leftType.equals(VarType.VARTYPE_BOOLEAN) && right instanceof ConstExprent) {
       ConstExprent constRight = (ConstExprent) right;
