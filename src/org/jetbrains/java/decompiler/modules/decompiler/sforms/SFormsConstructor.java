@@ -1,6 +1,7 @@
 package org.jetbrains.java.decompiler.modules.decompiler.sforms;
 
 import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.code.ExceptionHandler;
 import org.jetbrains.java.decompiler.modules.decompiler.ValidationHelper;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.*;
@@ -8,6 +9,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionNode;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructMethod;
+import org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribute;
 import org.jetbrains.java.decompiler.code.Instruction;
 import org.jetbrains.java.decompiler.code.InstructionSequence;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
@@ -121,7 +123,7 @@ public abstract class SFormsConstructor {
     if (seq == null) return;
 
     // Phase 1: Scan bytecode for store opcodes per slot
-    // Map slot → set of store opcode categories (0=istore, 1=lstore, 2=fstore, 3=dstore, 4=astore)
+    // Map slot -> set of store opcode categories (0=istore, 1=lstore, 2=fstore, 3=dstore, 4=astore)
     Map<Integer, Set<Integer>> slotStoreCategories = new HashMap<>();
     for (int i = 0; i < seq.length(); i++) {
       Instruction instr = seq.getInstr(i);
@@ -155,10 +157,6 @@ public abstract class SFormsConstructor {
       }
       // INT+OBJECT: split when the slot has BOTH astore (String/Object value) AND
       // istore (int value) with BOTH aload and iload, AND the method has a switch instruction.
-      // This catches String-switch desugaring where the same slot holds the String
-      // for the switch AND an int for a for-loop counter.
-      // Extra guard: require a lookupswitch or tableswitch somewhere in the method
-      // to avoid splitting boolean/null patterns that also have ISTORE+ASTORE.
       if (hasInt && hasObject) {
         int slot = entry.getKey();
         boolean hasAload = false, hasIload = false, hasSwitch = false;
@@ -168,71 +166,188 @@ public abstract class SFormsConstructor {
           if (si_instr.opcode == CodeConstants.opc_iload && si_instr.operand(0) == slot) hasIload = true;
           if (si_instr.opcode == CodeConstants.opc_lookupswitch || si_instr.opcode == CodeConstants.opc_tableswitch) hasSwitch = true;
         }
-        // Only split when all three conditions are met
         if (hasAload && hasIload && hasSwitch) {
           conflictSlots.add(slot);
         }
       }
     }
-    if (conflictSlots.isEmpty()) return;
 
-    // Phase 3: For each conflicting slot, find the majority store category
-    // and rename VarExprents of minority categories to new indices
-    Map<Integer, Integer> slotMajorityCategory = new HashMap<>();
-    for (int slot : conflictSlots) {
-      // Count VarExprents per category in the graph
-      Map<Integer, Integer> categoryCounts = new HashMap<>();
+    // Phase 2b: LVT-based slot reuse detection.
+    // Handles two patterns where the JVM reuses a slot for different variables:
+    //
+    // Pattern A (OBJECT+OBJECT): slot has only astore, but some astores are at
+    // bytecode offsets significantly before the earliest LVT entry for the slot.
+    // Example: rawget() stored to slot, checked with instanceof, then slot reused
+    // for an iterator or typed variable declared later.
+    //
+    // Pattern B (INT+OBJECT after LVT): slot has both istore and astore, and
+    // some istores are at offsets significantly after the last LVT entry for the
+    // slot. Example: BufferedReader in try block (covered by LVT), then boolean
+    // in catch block (istore after LVT range ends).
+    Set<Integer> lvtConflictSlots = new HashSet<>();
+    StructLocalVariableTableAttribute lvtAttr = mt.getLocalVariableAttr();
+    if (lvtAttr != null) {
+      Set<Integer> handlerTargetOffsets = new HashSet<>();
+      for (ExceptionHandler handler : seq.getExceptionTable().getHandlers()) {
+        handlerTargetOffsets.add(handler.handler);
+      }
 
-      // Determine category from store opcodes: category 0=int(istore), 2=float(fstore), 4=object(astore)
-      // For reads (iload/fload/aload), use the read opcode category
-      // Since we can't easily map VarExprents back to specific bytecode offsets,
-      // use the VarExprent's type to determine which category it belongs to
-      // VarExprent types at this stage are from construction: INT, FLOAT, OBJECT, etc.
-      slotMajorityCategory.put(slot, -1); // will be set below
+      for (Map.Entry<Integer, Set<Integer>> entry : slotStoreCategories.entrySet()) {
+        int slot = entry.getKey();
+        Set<Integer> cats = entry.getValue();
+        if (conflictSlots.contains(slot)) continue;
+
+        List<StructLocalVariableTableAttribute.LocalVariable> lvtEntries = new ArrayList<>();
+        lvtAttr.matchingVars(slot).forEach(lvtEntries::add);
+        if (lvtEntries.isEmpty()) continue;
+
+        // Find earliest LVT start and latest LVT end for this slot
+        int earliestStart = Integer.MAX_VALUE;
+        int latestEnd = Integer.MIN_VALUE;
+        for (StructLocalVariableTableAttribute.LocalVariable lv : lvtEntries) {
+          if (lv.getStart() < earliestStart) earliestStart = lv.getStart();
+          if (lv.getEnd() > latestEnd) latestEnd = lv.getEnd();
+        }
+
+        boolean hasUncoveredStore = false;
+
+        // Pattern A: astore-only slot with uncovered astore before earliest LVT start,
+        // AND the stored value is immediately checked with instanceof/checkcast.
+        // This catches rawget()+instanceof patterns where the slot holds a temporary
+        // Object that's checked before the slot is reused for a typed variable.
+        if (cats.size() == 1 && cats.contains(4)) {
+          for (int si = 0; si < seq.length(); si++) {
+            Instruction si_instr = seq.getInstr(si);
+            if (si_instr.opcode != CodeConstants.opc_astore || si_instr.operand(0) != slot) continue;
+            int offset = seq.getOffset(si);
+            if (handlerTargetOffsets.contains(offset)) continue;
+            if (offset < earliestStart - 15) {
+              // Verify: the stored value must be loaded and checked with instanceof
+              // or checkcast within the next few instructions
+              for (int ci = si + 1; ci < Math.min(si + 5, seq.length()); ci++) {
+                Instruction check = seq.getInstr(ci);
+                if (check.opcode == CodeConstants.opc_instanceof
+                    || check.opcode == CodeConstants.opc_checkcast) {
+                  hasUncoveredStore = true;
+                  break;
+                }
+              }
+              if (hasUncoveredStore) break;
+            }
+          }
+        }
+
+        // Pattern B: INT+OBJECT slot with istore far after last LVT end.
+        // This catches try/catch slot reuse where a resource (e.g. BufferedReader)
+        // is in the try block (covered by LVT) and a boolean/int is stored in a
+        // catch block (istore well after LVT range ends).
+        if (!hasUncoveredStore && cats.contains(0) && cats.contains(4)) {
+          for (int si = 0; si < seq.length(); si++) {
+            Instruction si_instr = seq.getInstr(si);
+            if (si_instr.opcode != CodeConstants.opc_istore || si_instr.operand(0) != slot) continue;
+            int offset = seq.getOffset(si);
+            if (offset > latestEnd + 50) {
+              hasUncoveredStore = true;
+              break;
+            }
+          }
+        }
+
+        if (hasUncoveredStore) {
+          lvtConflictSlots.add(slot);
+        }
+      }
     }
 
-    // Collect VarExprents per slot and determine categories from their immutable bytecodeTypeFamily
-    Map<Integer, Map<Integer, List<VarExprent>>> slotCategoryVars = new HashMap<>();
-    dgraph.iterateExprents(exprent -> {
-      List<Exprent> lst = exprent.getAllExprents(true);
-      lst.add(exprent);
-      for (Exprent expr : lst) {
-        if (expr instanceof VarExprent) {
-          VarExprent var = (VarExprent) expr;
-          int idx = var.getIndex();
-          if (!conflictSlots.contains(idx)) continue;
-          // Use the immutable bytecodeTypeFamily from construction
-          int cat = typeFamilyToStoreCategory(var.getBytecodeTypeFamily());
-          if (cat >= 0) {
-            slotCategoryVars.computeIfAbsent(idx, k -> new HashMap<>())
-                            .computeIfAbsent(cat, k -> new ArrayList<>()).add(var);
+    if (conflictSlots.isEmpty() && lvtConflictSlots.isEmpty()) return;
+
+    // Phase 3-4: Category-based splitting for INT+OBJECT and FLOAT/DOUBLE+OBJECT conflicts
+    if (!conflictSlots.isEmpty()) {
+      Map<Integer, Map<Integer, List<VarExprent>>> slotCategoryVars = new HashMap<>();
+      dgraph.iterateExprents(exprent -> {
+        List<Exprent> lst = exprent.getAllExprents(true);
+        lst.add(exprent);
+        for (Exprent expr : lst) {
+          if (expr instanceof VarExprent) {
+            VarExprent var = (VarExprent) expr;
+            int idx = var.getIndex();
+            if (!conflictSlots.contains(idx)) continue;
+            int cat = typeFamilyToStoreCategory(var.getBytecodeTypeFamily());
+            if (cat >= 0) {
+              slotCategoryVars.computeIfAbsent(idx, k -> new HashMap<>())
+                              .computeIfAbsent(cat, k -> new ArrayList<>()).add(var);
+            }
+          }
+        }
+        return 0;
+      });
+
+      CounterContainer counters = DecompilerContext.getCounterContainer();
+      for (int slot : conflictSlots) {
+        Map<Integer, List<VarExprent>> categoryVars = slotCategoryVars.get(slot);
+        if (categoryVars == null || categoryVars.size() <= 1) continue;
+
+        int majorCat = -1;
+        int maxCount = 0;
+        for (Map.Entry<Integer, List<VarExprent>> e : categoryVars.entrySet()) {
+          if (e.getValue().size() > maxCount) {
+            maxCount = e.getValue().size();
+            majorCat = e.getKey();
+          }
+        }
+
+        for (Map.Entry<Integer, List<VarExprent>> e : categoryVars.entrySet()) {
+          if (e.getKey() == majorCat) continue;
+          int newIdx = counters.getCounterAndIncrement(CounterContainer.VAR_COUNTER);
+          for (VarExprent var : e.getValue()) {
+            var.setIndex(newIdx);
           }
         }
       }
-      return 0;
-    });
+    }
 
-    // Phase 4: For each conflicting slot, keep majority category, rename others
-    CounterContainer counters = DecompilerContext.getCounterContainer();
-    for (int slot : conflictSlots) {
-      Map<Integer, List<VarExprent>> categoryVars = slotCategoryVars.get(slot);
-      if (categoryVars == null || categoryVars.size() <= 1) continue;
+    // Phase 5: LVT-based splitting for slot reuse.
+    // VarExprents whose bytecode offsets fall outside all LVT ranges get new indices.
+    if (!lvtConflictSlots.isEmpty() && lvtAttr != null) {
+      Map<Integer, List<VarExprent>> uncoveredVars = new HashMap<>();
 
-      // Find majority category
-      int majorCat = -1;
-      int maxCount = 0;
-      for (Map.Entry<Integer, List<VarExprent>> e : categoryVars.entrySet()) {
-        if (e.getValue().size() > maxCount) {
-          maxCount = e.getValue().size();
-          majorCat = e.getKey();
+      dgraph.iterateExprents(exprent -> {
+        List<Exprent> lst = exprent.getAllExprents(true);
+        lst.add(exprent);
+        for (Exprent expr : lst) {
+          if (expr instanceof VarExprent) {
+            VarExprent var = (VarExprent) expr;
+            int idx = var.getIndex();
+            if (!lvtConflictSlots.contains(idx)) continue;
+
+            int bcOffset = var.bytecode != null ? var.bytecode.nextSetBit(0) : -1;
+            if (bcOffset < 0) {
+              uncoveredVars.computeIfAbsent(idx, k -> new ArrayList<>()).add(var);
+              continue;
+            }
+
+            boolean covered = false;
+            for (StructLocalVariableTableAttribute.LocalVariable lv :
+                (Iterable<StructLocalVariableTableAttribute.LocalVariable>) () -> lvtAttr.matchingVars(idx).iterator()) {
+              if (bcOffset >= lv.getStart() - 15 && bcOffset < lv.getEnd()) {
+                covered = true;
+                break;
+              }
+            }
+            if (!covered) {
+              uncoveredVars.computeIfAbsent(idx, k -> new ArrayList<>()).add(var);
+            }
+          }
         }
-      }
+        return 0;
+      });
 
-      // Rename minority categories
-      for (Map.Entry<Integer, List<VarExprent>> e : categoryVars.entrySet()) {
-        if (e.getKey() == majorCat) continue;
+      CounterContainer counters = DecompilerContext.getCounterContainer();
+      for (int slot : lvtConflictSlots) {
+        List<VarExprent> uncovered = uncoveredVars.get(slot);
+        if (uncovered == null || uncovered.isEmpty()) continue;
         int newIdx = counters.getCounterAndIncrement(CounterContainer.VAR_COUNTER);
-        for (VarExprent var : e.getValue()) {
+        for (VarExprent var : uncovered) {
           var.setIndex(newIdx);
         }
       }
